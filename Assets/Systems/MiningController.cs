@@ -1,4 +1,4 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.InputSystem;
 using Pulseforge.Core;
@@ -6,92 +6,122 @@ using Pulseforge.Core;
 namespace Pulseforge.Systems
 {
     /// <summary>
-    /// ºñÆ® ±âÁØ ÀÔ·Â ÆÇÁ¤ ÄÁÆ®·Ñ·¯.
-    /// - ÅÇ ÀÔ·Â ½Ã: °¡Àå °¡±î¿î ºñÆ®¿Í ½Ã°£Â÷·Î Perfect/Good/Miss ÆÇÁ¤
-    /// - (¿É¼Ç) ÇØ´ç ºñÆ® Ã¢ ³»¿¡ "ÀÔ·ÂÀÌ ÀüÇô ¾øÀ¸¸é" ÀÚµ¿ Miss
+    /// Në°•ë§ˆë‹¤ ì…ë ¥í•´ì•¼ í•˜ëŠ” ë…¸íŠ¸ íŒì • ì»¨íŠ¸ë¡¤ëŸ¬.
+    /// - RhythmConductor.OnBeat()ì„ ì¹´ìš´íŠ¸í•˜ì—¬ "ë…¸íŠ¸ íƒ€ê²Ÿ ë°•ì"ì—ë§Œ íŒì •ì°½ì„ ì—°ë‹¤.
+    /// - íŒì •ì°½(goodWindow) ë‚´ì—ì„œ íƒ­í•˜ë©´ Perfect/Good/Miss íŒì •.
+    /// - ì°½ì´ ë‹«í ë•Œê¹Œì§€ ì…ë ¥ì´ ì—†ìœ¼ë©´ Miss.
+    /// - ì°½ì´ ì•„ë‹ ë•Œ íƒ­í•˜ë©´(ì˜µì…˜) Miss ì²˜ë¦¬.
     /// </summary>
     public class MiningController : MonoBehaviour
     {
-        [Header("ÂüÁ¶")]
+        [Header("ì°¸ì¡°")]
         [SerializeField] private RhythmConductor conductor;
 
-        [Header("ÆÇÁ¤ À©µµ¿ì(ÃÊ)")]
-        [Tooltip("Perfect ÆÇÁ¤ ¿ÀÂ÷ ÇÑ°è(ÃÊ)")]
+        [Header("íŒì • ì°½(ì´ˆ)")]
+        [Tooltip("Perfect íŒì • ì˜¤ì°¨ í•œê³„(ì´ˆ)")]
         [SerializeField] private float perfectWindow = 0.10f;
-        [Tooltip("Good ÆÇÁ¤ ¿ÀÂ÷ ÇÑ°è(ÃÊ). ÀÌ °ªÀ» ³ÑÀ¸¸é Miss")]
+
+        [Tooltip("Good íŒì • ì˜¤ì°¨ í•œê³„(ì´ˆ). ì´ ê°’ì„ ë„˜ìœ¼ë©´ Miss")]
         [SerializeField] private float goodWindow = 0.25f;
 
-        [Header("¹ÌÀÔ·Â Miss ¿É¼Ç")]
-        [Tooltip("°¢ ºñÆ®¸¶´Ù goodWindow µ¿¾È ÀÔ·ÂÀÌ ¾øÀ¸¸é Miss Ã³¸®")]
-        [SerializeField] private bool missOnNoInput = true;
+        [Header("ë…¸íŠ¸ ì£¼ê¸°")]
+        [Tooltip("ëª‡ ë°•ë§ˆë‹¤ í•œ ë²ˆ ë…¸íŠ¸ë¥¼ ì¹ ì§€ (ì˜ˆ: 2ë©´ ë‘ ë°•ì— í•œ ë²ˆ)")]
+        [SerializeField] private int beatsPerNote = 2;
 
-        [Header("ÀÌº¥Æ® (ÇÊ¿ä½Ã ÀÎ½ºÆåÅÍ¿¡¼­ ÈÄÅ·)")]
+        [Tooltip("ìœ„ìƒ ì˜¤í”„ì…‹(0~beatsPerNote-1). ì˜ˆ: 1ì´ë©´ ë‘ ë²ˆì§¸ ë°•ë§ˆë‹¤")]
+        [SerializeField] private int notePhase = 0;
+
+        [Header("ê¸°íƒ€ ì˜µì…˜")]
+        [Tooltip("ë…¸íŠ¸ ì°½ì´ ì•„ë‹ ë•Œ íƒ­í•˜ë©´ Missë¡œ ì²˜ë¦¬")]
+        [SerializeField] private bool offbeatTapIsMiss = true;
+
+        [Header("ì´ë²¤íŠ¸")]
         public UnityEvent OnPerfect;
         public UnityEvent OnGood;
         public UnityEvent OnMiss;
 
         public enum Judgement { Perfect, Good, Miss }
 
-        // ºñÆ® ÀÎµ¦½º Æ®·¡Å·
-        private int beatIndex = 0;
-        private int lastSatisfiedBeatIndex = -9999; // ÀÌ ºñÆ®¿¡´Â À¯È¿ ÀÔ·ÂÀÌ ÀÖ¾ú´Ù
+        // ë‚´ë¶€ ìƒíƒœ
+        private int beatIndex = -1;                 // OnBeat í˜¸ì¶œë  ë•Œ ì¦ê°€
+        private bool windowOpen = false;            // í˜„ì¬ ë…¸íŠ¸ íŒì •ì°½ ì—´ë¦¼ ì—¬ë¶€
+        private bool satisfiedThisNote = false;     // í•´ë‹¹ ë…¸íŠ¸ì— ìœ íš¨ ì…ë ¥ì´ ìˆì—ˆëŠ”ì§€
+        private float currentNoteCenterTime = 0f;   // ì´ ë…¸íŠ¸ì˜ ê¸°ì¤€ ì‹œê°(Time.time)
 
-        void OnEnable()
+        private void OnEnable()
         {
             if (conductor != null)
                 conductor.OnBeat.AddListener(HandleBeat);
         }
 
-        void OnDisable()
+        private void OnDisable()
         {
             if (conductor != null)
                 conductor.OnBeat.RemoveListener(HandleBeat);
         }
 
-        /// <summary>PlayerInputÀÇ Gameplay/Tap¿¡ ¿¬°á</summary>
+        /// <summary>PlayerInputì˜ Gameplay/Tapì— ì—°ê²°.</summary>
         public void OnTap(InputAction.CallbackContext ctx)
         {
-            if (!ctx.performed || conductor == null) return;
+            if (!ctx.performed) return;
 
             float now = Time.time;
-            float offset = conductor.GetOffsetToNearestBeat(now);
 
-            Judgement j;
-            if (offset <= perfectWindow) j = Judgement.Perfect;
-            else if (offset <= goodWindow) j = Judgement.Good;
-            else j = Judgement.Miss;
+            if (windowOpen)
+            {
+                float offset = Mathf.Abs(now - currentNoteCenterTime);
+                var j = Judge(offset);
 
-            // ÇöÀç ºñÆ®¸¦ ¸¸Á· Ã³¸®(Perfect/GoodÀÏ ¶§)
-            if (j != Judgement.Miss)
-                lastSatisfiedBeatIndex = beatIndex;
+                if (j != Judgement.Miss)
+                    satisfiedThisNote = true;
 
-            FireJudgement(j, offset);
+                Fire(j, offset);
+            }
+            else
+            {
+                if (offbeatTapIsMiss)
+                    Fire(Judgement.Miss, goodWindow + 0.001f);
+            }
         }
 
         private void HandleBeat()
         {
             beatIndex++;
 
-            if (!missOnNoInput) return;
+            if (beatsPerNote <= 0) beatsPerNote = 1; // ì•ˆì „ì¥ì¹˜
+            int phase = Mathf.FloorToInt(Mathf.Repeat(notePhase, beatsPerNote));
+            bool isNoteBeat = (beatIndex % beatsPerNote) == phase;
 
-            // goodWindow µÚ¿¡ ºñÆ®°¡ ¸¸Á·µÇ¾ú´ÂÁö Ã¼Å© ¡æ ¾Æ´Ï¸é Miss
-            // ÄÚ·çÆ¾ ´ë½Å °£´ÜÇÑ Áö¿¬ È£Ãâ
-            Invoke(nameof(CheckNoInputMiss), goodWindow);
+            if (isNoteBeat)
+                OpenWindow();
         }
 
-        private void CheckNoInputMiss()
+        private void OpenWindow()
         {
-            // ÀÌ È£Ãâ ½ÃÁ¡ÀÇ beatIndex´Â ÀÌ¹Ì ´ÙÀ½ ºñÆ®·Î ÁøÇàµÇ¾úÀ» ¼ö ÀÖÀ¸¹Ç·Î
-            // "Á÷Àü ºñÆ®"°¡ ¸¸Á·µÆ´ÂÁö È®ÀÎÇÑ´Ù.
-            int justPassedBeat = beatIndex;
-            if (lastSatisfiedBeatIndex < justPassedBeat)
-            {
-                // Á÷Àü ºñÆ®°¡ ¸¸Á·µÇÁö ¾Ê¾ÒÀ½ ¡æ Miss
-                FireJudgement(Judgement.Miss, offsetSeconds: goodWindow + 0.0001f);
-            }
+            windowOpen = true;
+            satisfiedThisNote = false;
+            currentNoteCenterTime = Time.time;
+
+            CancelInvoke(nameof(CloseWindow)); // ì¤‘ë³µ ë°©ì§€
+            Invoke(nameof(CloseWindow), goodWindow);
         }
 
-        private void FireJudgement(Judgement j, float offsetSeconds)
+        private void CloseWindow()
+        {
+            if (windowOpen && !satisfiedThisNote)
+                Fire(Judgement.Miss, goodWindow + 0.001f);
+
+            windowOpen = false;
+        }
+
+        private Judgement Judge(float offset)
+        {
+            if (offset <= perfectWindow) return Judgement.Perfect;
+            if (offset <= goodWindow) return Judgement.Good;
+            return Judgement.Miss;
+        }
+
+        private void Fire(Judgement j, float offsetSeconds)
         {
             switch (j)
             {
@@ -110,11 +140,20 @@ namespace Pulseforge.Systems
             }
         }
 
-        // ÀÎ½ºÆåÅÍ ºü¸¥ Æ©´×¿ë
+        // ---------- ì¸ìŠ¤í™í„°/ì™¸ë¶€ ì œì–´ìš© ----------
+        public void SetBeatsPerNote(int v) => beatsPerNote = Mathf.Max(1, v);
+        public void SetNotePhase(int phase) => notePhase = phase;
         public void SetWindows(float perfect, float good)
         {
             perfectWindow = Mathf.Max(0f, perfect);
             goodWindow = Mathf.Max(perfectWindow, good);
         }
+
+        // ---------- ì½ê¸°ìš© Getter (UI ë“±) ----------
+        public int BeatsPerNote => Mathf.Max(1, beatsPerNote);
+        public int NotePhase => Mathf.FloorToInt(Mathf.Repeat(notePhase, BeatsPerNote));
+        public int CurrentBeatIndex => beatIndex;
+        public float PerfectWindow => perfectWindow;  // â† BeatBarUIê°€ ì°¸ì¡°
+        public float GoodWindow => goodWindow;     // â† BeatBarUIê°€ ì°¸ì¡°
     }
 }
