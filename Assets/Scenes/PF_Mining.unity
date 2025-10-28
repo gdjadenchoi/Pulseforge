@@ -355,7 +355,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6dffdb9bfbce0a743bea36b5d8a56fc8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  crystalLabel: {fileID: 1173683464}
+  legacySingleText: 1
+  legacyLabel: {fileID: 0}
   bindings: []
 --- !u!1 &470865322
 GameObject:
@@ -405,7 +406,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6dffdb9bfbce0a743bea36b5d8a56fc8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  crystalLabel: {fileID: 1173683464}
+  legacySingleText: 1
+  legacyLabel: {fileID: 0}
   bindings: []
 --- !u!1 &547926513
 GameObject:
@@ -853,7 +855,6 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 832034778}
-  - {fileID: 1964438402}
   - {fileID: 1128913640}
   - {fileID: 2048143738}
   m_Father: {fileID: 0}
@@ -1023,17 +1024,6 @@ AudioSource:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
---- !u!114 &1173683464 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 8616171306843965352, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
-  m_PrefabInstance: {fileID: 3033119764986061324}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
 --- !u!1 &1214686450
 GameObject:
   m_ObjectHideFlags: 0
@@ -1307,37 +1297,6 @@ Transform:
   - {fileID: 22509591}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1964438400
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1964438402}
-  m_Layer: 0
-  m_Name: GameSystems
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1964438402
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1964438400}
-  serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -6.4891667, y: -1.2566411, z: -0.051517658}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 1012597411}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2048143736
 GameObject:
   m_ObjectHideFlags: 0
@@ -1481,7 +1440,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 131337205228580298, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
       propertyPath: m_SizeDelta.x
-      value: -40
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 131337205228580298, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
       propertyPath: m_SizeDelta.y
@@ -1521,7 +1480,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 131337205228580298, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: -20
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 131337205228580298, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -1539,8 +1498,32 @@ PrefabInstance:
       propertyPath: m_Name
       value: TopBar
       objectReference: {fileID: 0}
+    - target: {fileID: 8616171306843965352, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
+      propertyPath: m_fontSize
+      value: 22
+      objectReference: {fileID: 0}
+    - target: {fileID: 8616171306843965352, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
+      propertyPath: m_fontSizeMax
+      value: 22
+      objectReference: {fileID: 0}
+    - target: {fileID: 8616171306843965352, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
+      propertyPath: m_fontSizeMin
+      value: 14
+      objectReference: {fileID: 0}
+    - target: {fileID: 8616171306843965352, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
+      propertyPath: m_HorizontalAlignment
+      value: 2
+      objectReference: {fileID: 0}
+    - target: {fileID: 8879604657502157622, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
+      propertyPath: m_AnchorMax.x
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 8879604657502157622, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
       propertyPath: m_AnchorMax.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8879604657502157622, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
+      propertyPath: m_AnchorMin.x
       value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 8879604657502157622, guid: 69b8e3de8ccf5374caab586fb27b1e02, type: 3}
