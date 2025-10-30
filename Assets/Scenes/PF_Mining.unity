@@ -210,7 +210,7 @@ GameObject:
   - component: {fileID: 42209189}
   - component: {fileID: 42209188}
   m_Layer: 0
-  m_Name: OreRoot
+  m_Name: Legacy_OreRoot
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -369,12 +369,12 @@ GameObject:
   - component: {fileID: 470865323}
   - component: {fileID: 470865324}
   m_Layer: 5
-  m_Name: HUD
+  m_Name: Legacy_HUD
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &470865323
 RectTransform:
   m_ObjectHideFlags: 0
@@ -871,7 +871,7 @@ GameObject:
   - component: {fileID: 1128913639}
   - component: {fileID: 1128913641}
   m_Layer: 0
-  m_Name: RhythmSystem
+  m_Name: Legacy_RhythmSystem
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1117,7 +1117,7 @@ GameObject:
   - component: {fileID: 1625604986}
   - component: {fileID: 1625604985}
   m_Layer: 0
-  m_Name: Mining
+  m_Name: Legacy_Mining
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1308,7 +1308,7 @@ GameObject:
   - component: {fileID: 2048143738}
   - component: {fileID: 2048143737}
   m_Layer: 0
-  m_Name: BeatLogger
+  m_Name: Legacy_BeatLogger
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
