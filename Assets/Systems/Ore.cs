@@ -1,223 +1,218 @@
-﻿// Assets/Systems/Ore.cs
-using System;
-using System.Collections.Generic;
+﻿using System.Collections;
 using UnityEngine;
-using UnityEngine.Events;
 
 namespace Pulseforge.Systems
 {
-    /// <summary>
-    /// 채굴 대상 Ore:
-    /// - HP를 가지며 0이 되면 파괴/비활성화
-    /// - 채굴 중 색/스케일 히트 이펙트
-    /// - 하단 HP바(SpriteRenderer) 생성
-    /// - 파괴 시 RewardManager에 보상 지급
-    /// </summary>
     [RequireComponent(typeof(Collider2D))]
-    [RequireComponent(typeof(SpriteRenderer))]
+    [DisallowMultipleComponent]
     public class Ore : MonoBehaviour
     {
-        // ---------- Stats ----------
-        [Header("Stats")]
-        [SerializeField] private float maxHP = 10f;
-        [SerializeField] private bool destroyOnDeath = true;
+        [Header("HP")]
+        [SerializeField] private float maxHp = 30f;
+        [SerializeField] private bool destroyOnBreak = true;
 
-        // ---------- FX ----------
-        [Header("FX")]
-        [SerializeField] private Color baseColor = Color.white;
-        [SerializeField] private Color minedTint = new Color(0.75f, 1f, 1f, 1f);
-        [SerializeField, Range(1f, 1.3f)] private float hitScale = 1.12f;
-        [SerializeField, Range(1f, 20f)] private float relaxSpeed = 10f;
+        [Header("Reward")]
+        [SerializeField] private RewardType rewardType = RewardType.Crystal;
+        [SerializeField] private int rewardAmount = 1;
 
-        // ---------- HP Bar ----------
-        [Header("HP Bar")]
+        [Header("Hit Feedback")]
+        [SerializeField] private bool wobbleOnHit = true;
+        [SerializeField] private float wobblePos = 0.035f;
+        [SerializeField] private float wobbleScale = 0.06f;
+        [SerializeField] private float wobbleDuration = 0.08f;
+
+        [Header("HP Bar (world-units)")]
         [SerializeField] private bool showHpBar = true;
-        [SerializeField] private float barWidth = 0.9f;
-        [SerializeField] private float barHeight = 0.12f;
-        [SerializeField] private float barYOffset = 0f; // 0이면 자동 배치
-        [SerializeField] private Color barBackColor = new(0f, 0f, 0f, 0.75f);
-        [SerializeField] private Color barFillColor = new(1f, 0.25f, 0.25f, 1f);
+        [Tooltip("처음엔 숨겨두고, 한 번이라도 맞으면 켜짐")]
+        [SerializeField] private bool revealBarOnFirstHit = true;
+        [SerializeField] private bool barAbove = false;
+        [SerializeField] private float barYOffset = 0.0f;
+        [SerializeField] private Vector2 barSize = new Vector2(0.7f, 0.08f);
+        [SerializeField] private Color barColor = new Color(1f, 0.12f, 0.12f, 1f);
+        [SerializeField] private Color barBgColor = new Color(0, 0, 0, 0.85f);
+        [SerializeField] private int barSortingOffsetBG = 90;
+        [SerializeField] private int barSortingOffsetFill = 100;
 
-        // ---------- Reward ----------
-        // 전역 enum RewardType(RewardType.cs)을 사용한다.
-        [Serializable]
-        public struct RewardEntry
-        {
-            public RewardType type;
-            public int minAmount;
-            public int maxAmount;
-        }
+        [Header("Pixel-Perfect (optional)")]
+        [SerializeField] private bool minOnePixelThickness = false;
+        [SerializeField] private int referencePPU = 128;
 
-        [Header("Reward (on death)")]
-        [SerializeField]
-        private List<RewardEntry> rewards = new()
-        {
-            new RewardEntry { type = RewardType.Crystal, minAmount = 1, maxAmount = 3 }
-        };
+        private float hp;
+        private Transform barRoot;
+        private SpriteRenderer srBg;
+        private SpriteRenderer srFill;
+        private static Sprite _onePxSprite;
+        private SpriteRenderer mySprite;
+        private int mySortingOrder;
+        private bool barDirty;
+        private Coroutine wobbleCo;
 
-        [Header("Events")]
-        public UnityEvent<RewardType, int> OnDestroyedWithReward;
-
-        // ---------- Runtime ----------
-        private float _hp;
-        private SpriteRenderer _sr;
-        private Color _targetColor;
-        private Vector3 _targetScale;
-
-        // HP bar parts
-        private Transform _barRoot;
-        private SpriteRenderer _barBack;
-        private SpriteRenderer _barFill;
-
-        // 재사용 화이트 스프라이트 (null 한 번만 생성)
-        private static Sprite _whiteSprite;
-        private static Sprite WhiteSprite
-        {
-            get
-            {
-                if (_whiteSprite == null)
-                    _whiteSprite = Sprite.Create(
-                        Texture2D.whiteTexture,
-                        new Rect(0, 0, 1, 1),
-                        new Vector2(0.5f, 0.5f),
-                        1f
-                    );
-                return _whiteSprite;
-            }
-        }
-
-        // ---------- Unity ----------
         private void Awake()
         {
-            _sr = GetComponent<SpriteRenderer>();
-            if (_sr != null) _sr.color = baseColor;
+            hp = Mathf.Max(1f, maxHp);
+            mySprite = GetComponentInChildren<SpriteRenderer>();
+            mySortingOrder = mySprite ? mySprite.sortingOrder : 0;
 
-            var col = GetComponent<Collider2D>();
-            col.isTrigger = true;
+            EnsureBarBuilt();
+            SetBarVisible(showHpBar && !revealBarOnFirstHit);
+            MarkBarDirty();
         }
 
-        private void OnEnable()
+        private void LateUpdate()
         {
-            _hp = Mathf.Max(1f, maxHP);
-            _targetColor = baseColor;
-            _targetScale = Vector3.one;
-
-            BuildHpBar();
-            UpdateHpBar();
-        }
-
-        private void OnDisable()
-        {
-            DestroyHpBar();
-        }
-
-        private void Update()
-        {
-            if (_sr == null) return;
-
-            // 히트 이펙트 감쇠
-            _sr.color = Color.Lerp(_sr.color, _targetColor, Time.deltaTime * relaxSpeed);
-            transform.localScale = Vector3.Lerp(transform.localScale, _targetScale, Time.deltaTime * relaxSpeed);
-
-            // 타깃 원복
-            _targetColor = baseColor;
-            _targetScale = Vector3.one;
-        }
-
-        // ---------- Public API ----------
-        /// <summary>커서 등에서 dps*dt 만큼 HP 감소</summary>
-        public void ApplyDamage(float dps, float dt)
-        {
-            if (_hp <= 0f || dps <= 0f || dt <= 0f) return;
-
-            _hp -= dps * dt;
-            if (_hp < 0f) _hp = 0f;
-
-            // 히트 피드백
-            _targetColor = minedTint;
-            _targetScale = Vector3.one * hitScale;
-
-            UpdateHpBar();
-
-            if (_hp <= 0f)
-                OnDeath();
-        }
-
-        // ---------- Death / Reward ----------
-        private void OnDeath()
-        {
-            if (rewards != null && rewards.Count > 0)
+            if (barDirty)
             {
-                var rm = RewardManager.SafeInstance; // null-safe
-                for (int i = 0; i < rewards.Count; i++)
-                {
-                    var r = rewards[i];
-                    int lo = Mathf.Min(r.minAmount, r.maxAmount);
-                    int hi = Mathf.Max(r.minAmount, r.maxAmount);
-                    int amt = UnityEngine.Random.Range(lo, hi + 1);
-                    if (amt <= 0) continue;
+                barDirty = false;
+                LayoutBar();
+                UpdateBarFill();
+            }
+        }
 
-                    rm?.Add(r.type, amt);
-                    OnDestroyedWithReward?.Invoke(r.type, amt);
-                }
+        public void ApplyHit(float damage)
+        {
+            if (damage <= 0f) return;
+
+            if (revealBarOnFirstHit && showHpBar) SetBarVisible(true);
+
+            hp = Mathf.Max(0f, hp - damage);
+            UpdateBarFill();
+
+            if (wobbleOnHit) PlayWobble();
+
+            if (hp <= 0f)
+                OnBroken();
+        }
+
+        private void OnBroken()
+        {
+            // ✅ 보상 지급 (RewardManager 연동)
+            if (rewardAmount > 0)
+                RewardManager.Instance?.Add(rewardType, rewardAmount);
+
+            if (destroyOnBreak)
+                Destroy(gameObject);
+            else
+            {
+                hp = maxHp;
+                UpdateBarFill();
+            }
+        }
+
+        // ── HP BAR ──────────────────────────────────────────────────────────────
+        private void EnsureBarBuilt()
+        {
+            if (_onePxSprite == null)
+            {
+                var tex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+                tex.SetPixel(0, 0, Color.white);
+                tex.Apply();
+                _onePxSprite = Sprite.Create(tex, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f), 1f);
+                _onePxSprite.name = "_pf_onePx";
             }
 
-            if (destroyOnDeath) Destroy(gameObject);
-            else gameObject.SetActive(false);
+            if (barRoot == null)
+            {
+                var root = new GameObject("_HPBar");
+                root.transform.SetParent(transform, false);
+                barRoot = root.transform;
+
+                var bg = new GameObject("BG");
+                bg.transform.SetParent(barRoot, false);
+                srBg = bg.AddComponent<SpriteRenderer>();
+                srBg.sprite = _onePxSprite;
+
+                var fill = new GameObject("Fill");
+                fill.transform.SetParent(barRoot, false);
+                srFill = fill.AddComponent<SpriteRenderer>();
+                srFill.sprite = _onePxSprite;
+            }
+
+            int bgOrder = mySortingOrder + barSortingOffsetBG;
+            int fillOrder = mySortingOrder + barSortingOffsetFill;
+            int sortingLayerId = mySprite ? mySprite.sortingLayerID : 0;
+
+            srBg.sortingLayerID = sortingLayerId;
+            srFill.sortingLayerID = sortingLayerId;
+            srBg.sortingOrder = bgOrder;
+            srFill.sortingOrder = fillOrder;
+
+            srBg.color = barBgColor;
+            srFill.color = barColor;
         }
 
-        // ---------- HP Bar ----------
-        private void BuildHpBar()
+        private void SetBarVisible(bool v)
         {
-            DestroyHpBar();
-            if (!showHpBar) return;
-
-            _barRoot = new GameObject("HPBar").transform;
-            _barRoot.SetParent(transform, false);
-
-            _barBack = new GameObject("Back").AddComponent<SpriteRenderer>();
-            _barFill = new GameObject("Fill").AddComponent<SpriteRenderer>();
-            _barBack.transform.SetParent(_barRoot, false);
-            _barFill.transform.SetParent(_barRoot, false);
-
-            // 광석보다 항상 앞에 보이도록 같은 레이어 + 높은 Order
-            int baseOrder = _sr ? _sr.sortingOrder : 0;
-            int layerId = _sr ? _sr.sortingLayerID : 0;
-            _barBack.sortingLayerID = layerId; _barFill.sortingLayerID = layerId;
-            _barBack.sortingOrder = baseOrder + 10;
-            _barFill.sortingOrder = baseOrder + 11;
-
-            _barBack.color = barBackColor;
-            _barFill.color = barFillColor;
-
-            float yOff = barYOffset;
-            if (Mathf.Approximately(yOff, 0f) && _sr && _sr.sprite)
-                yOff = -(_sr.bounds.extents.y + 0.12f);
-            _barRoot.localPosition = new Vector3(0f, yOff, 0f);
-
-            UpdateHpBar();
+            if (barRoot) barRoot.gameObject.SetActive(showHpBar && v);
         }
 
-        private void UpdateHpBar()
+        private void LayoutBar()
         {
-            if (_barBack == null || _barFill == null) return;
+            float yOff = Mathf.Abs(barYOffset) * (barAbove ? +1f : -1f);
 
-            _barBack.sprite = WhiteSprite;
-            _barFill.sprite = WhiteSprite;
+            float height = barSize.y;
+            if (minOnePixelThickness && referencePPU > 0)
+                height = Mathf.Max(height, 1f / referencePPU);
 
-            _barBack.transform.localScale = new Vector3(barWidth, barHeight, 1f);
+            barRoot.localPosition = new Vector3(0f, yOff, 0f);
 
-            float t = Mathf.Clamp01(_hp / Mathf.Max(0.0001f, maxHP));
-            _barFill.transform.localScale = new Vector3(barWidth * t, barHeight, 1f);
-            _barFill.transform.localPosition = new Vector3(-(barWidth * (1f - t)) * 0.5f, 0f, 0f);
+            srBg.transform.localPosition = Vector3.zero;
+            srFill.transform.localPosition = Vector3.zero;
+
+            srBg.transform.localScale = new Vector3(barSize.x, height, 1f);
+            srFill.transform.localScale = new Vector3(barSize.x, height, 1f);
         }
 
-        private void DestroyHpBar()
+        private void UpdateBarFill()
         {
-            if (_barBack) Destroy(_barBack.gameObject);
-            if (_barFill) Destroy(_barFill.gameObject);
-            if (_barRoot) Destroy(_barRoot.gameObject);
-            _barBack = null; _barFill = null; _barRoot = null;
+            float t = Mathf.Approximately(maxHp, 0f) ? 0f : Mathf.Clamp01(hp / maxHp);
+            float W = barSize.x;
+            float newW = W * t;
+
+            srFill.transform.localScale = new Vector3(newW, srBg.transform.localScale.y, 1f);
+            srFill.transform.localPosition = new Vector3(-(W - newW) * 0.5f, 0f, 0f);
+        }
+
+        private void MarkBarDirty() => barDirty = true;
+
+        // ── WOBBLE ──────────────────────────────────────────────────────────────
+        private void PlayWobble()
+        {
+            if (wobbleCo != null) StopCoroutine(wobbleCo);
+            wobbleCo = StartCoroutine(CoWobble());
+        }
+
+        private IEnumerator CoWobble()
+        {
+            float t = 0f;
+            Vector3 basePos = transform.localPosition;
+            Vector3 baseScale = transform.localScale;
+
+            while (t < wobbleDuration)
+            {
+                t += Time.deltaTime;
+                float n = 1f - (t / wobbleDuration);
+
+                float offX = Mathf.Sin(t * 62.83f) * wobblePos * n;
+                float scl = 1f + (Mathf.Sin(t * 94.25f) * wobbleScale * n);
+
+                transform.localPosition = basePos + new Vector3(offX, 0f, 0f);
+                transform.localScale = baseScale * scl;
+                yield return null;
+            }
+
+            transform.localPosition = basePos;
+            transform.localScale = baseScale;
+            wobbleCo = null;
+        }
+
+        // ── Gizmo ──────────────────────────────────────────────────────────────
+        private void OnDrawGizmosSelected()
+        {
+            Gizmos.color = new Color(1, 0, 0, 0.35f);
+            float yOff = Mathf.Abs(barYOffset) * (barAbove ? +1f : -1f);
+            Vector3 center = transform.position + new Vector3(0, yOff, 0);
+            Vector3 size = new Vector3(barSize.x, barSize.y, 0.001f);
+            Gizmos.DrawCube(center, size);
         }
     }
 }

@@ -3,192 +3,313 @@ using UnityEngine;
 
 namespace Pulseforge.Systems
 {
+    /// <summary>
+    /// 균등 분포 스폰:
+    /// - 모든 후보 위치를 생성 → Fisher-Yates 셔플 → quota만큼 순회 배치.
+    /// - Pass: GridCenters(무겹침) → Edge → Corner → RandomFill(살짝 겹침 허용)
+    /// - 성장: n초마다 k개씩 목표치 증가 (풀 리스폰/증분 둘 다 지원)
+    /// </summary>
     public class OreSpawner : MonoBehaviour
     {
-        // ====== Inspector ======
-        [Header("Prefabs")]
-        [SerializeField] private Ore orePrefab;
+        [Header("Refs")]
+        [SerializeField] private Camera targetCamera;
+        [SerializeField] private Transform oreRoot;         // 없으면 자동 생성
+        [SerializeField] private GameObject orePrefab;
 
-        [Header("Grid Size (count)")]
-        public int columns = 12;
-        public int rows = 7;
+        [Header("Spawn Base")]
+        [SerializeField] private int initialCount = 12;
+        [SerializeField] private int maxCount = 300;
+        [SerializeField] private float borderPadding = 0.5f;
+        [SerializeField] private float extraPadding = 0.05f;
 
-        public enum TileSizeSource { UsePrefabSize, ManualTileSize }
+        [Header("Grid")]
+        [SerializeField] private float cellX = 0.9f;
+        [SerializeField] private float cellY = 0.9f;
+        [SerializeField] private float jitter = 0.12f;
 
-        [Header("Tile Size")]
-        public TileSizeSource tileSizeSource = TileSizeSource.UsePrefabSize;
-        public Vector2 manualTileSize = new(1f, 1f);
+        [Header("Overfill Layers")]
+        [Range(0.5f, 1.2f)] [SerializeField] private float minRadiusFactor = 0.9f;
+        [SerializeField] private bool enableEdgeLayer = true;
+        [SerializeField] private bool enableCornerLayer = true;
+        [SerializeField] private bool enableRandomFill = true;
 
-        [Header("Spacing")]
-        public float gapX = 0.06f;
-        public float gapY = 0.06f;
-        public Vector2 jitter = new(0.02f, 0.02f);
+        [Header("Growth (Play Mode)")]
+        [SerializeField] private bool enableGrowth = true;
+        [SerializeField] private float increaseIntervalSec = 10f;
+        [SerializeField] private int increaseBy = 6;
+        [SerializeField] private bool fullRespawnOnGrowth = true;
 
-        [Header("Layout")]
-        public bool useRowStagger = true;
-        [Range(0f, 1f)] public float fillChance = 0.35f;
+        [Header("Debug")]
+        [SerializeField] private bool autoRespawnOnStart = true;
 
-        [Header("Overlap Check")]
-        public string oreLayer = "Ore";
-        public bool preventOverlap = true;
+        // runtime
+        private Rect _worldRect;
+        private float _oreRadius = 0.45f;
+        private int _targetCount;
+        private float _nextTick;
+        private int _rngSeedSalt; // 프레임 간 분포 다양화
 
-        [Header("Refill")]
-        [Tooltip("이 값보다 적게 남으면 보충 시도")]
-        public int minAliveToRefill = 30;
-        [Tooltip("보충 체크 주기(초)")]
-        public float refillInterval = 1.0f;
+        void Reset() { TryAutoWire(); TryInferRadius(); }
+        void Awake() { TryAutoWire(); TryInferRadius(); }
 
-        // ====== Runtime ======
-        private readonly List<Vector3> slots = new();
-        private float nextRefill;
-        private int oreLayerIndex = -1;
-        private float effectiveRadius = 0.3f; // 슬롯 충돌 반경
-
-        // ====== Unity ======
-        private void Start()
+        void Start()
         {
-            oreLayerIndex = LayerMask.NameToLayer(oreLayer);
-            if (oreLayerIndex < 0)
-                Debug.LogWarning($"[OreSpawner] Layer '{oreLayer}' not found. Overlap mask will be 'Everything'.");
-
-            BuildSlots();
-            SpawnInitial();
-            nextRefill = Time.time + refillInterval;
+            BuildWorldRect();
+            _targetCount = Mathf.Clamp(initialCount, 0, maxCount);
+            if (autoRespawnOnStart) Respawn(_targetCount);
+            if (enableGrowth) _nextTick = Time.time + Mathf.Max(0.1f, increaseIntervalSec);
         }
 
-        private void Update()
+        void Update()
         {
-            if (Time.time >= nextRefill)
+            if (!enableGrowth) return;
+            if (Time.time >= _nextTick)
             {
-                nextRefill = Time.time + refillInterval;
-                RefillIfNeeded();
-            }
-        }
-
-        // ====== Build & Spawn ======
-        private void BuildSlots()
-        {
-            slots.Clear();
-
-            Vector2 unitSize = GetTileSize();
-            float w = unitSize.x + gapX;
-            float h = unitSize.y + gapY;
-
-            // 슬롯 충돌 반경(타일 크기 기반) 설정
-            effectiveRadius = Mathf.Min(unitSize.x, unitSize.y) * 0.48f;
-
-            var cam = Camera.main;
-            var lb = cam.ViewportToWorldPoint(new Vector3(0f, 0f, 0f));
-            var rt = cam.ViewportToWorldPoint(new Vector3(1f, 1f, 0f));
-
-            float margin = 0.6f;
-            float startX = lb.x + margin;
-            float startY = rt.y - margin;
-
-            for (int r = 0; r < rows; r++)
-            {
-                for (int c = 0; c < columns; c++)
+                _nextTick += Mathf.Max(0.1f, increaseIntervalSec);
+                int newTarget = Mathf.Min(maxCount, _targetCount + Mathf.Max(0, increaseBy));
+                if (newTarget != _targetCount)
                 {
-                    float x = startX + c * w;
-                    if (useRowStagger && (r % 2 == 1)) x += w * 0.5f;
-
-                    float y = startY - r * h;
-                    slots.Add(new Vector3(x, y, 0f));
+                    _targetCount = newTarget;
+                    if (fullRespawnOnGrowth) Respawn(_targetCount);
+                    else TopUpTo(_targetCount);
                 }
             }
         }
 
-        private void SpawnInitial()
+        [ContextMenu("Respawn (to current target)")]
+        public void RespawnContext() => Respawn(Mathf.Max(0, _targetCount));
+
+        [ContextMenu("Clear")]
+        public void Clear()
         {
-            foreach (var pos in slots)
+            if (!oreRoot) return;
+            for (int i = oreRoot.childCount - 1; i >= 0; --i)
+                Destroy(oreRoot.GetChild(i).gameObject);
+        }
+
+        // ---------------- core ----------------
+        private void TryAutoWire()
+        {
+            if (!targetCamera) targetCamera = Camera.main;
+            if (!oreRoot)
             {
-                if (Random.value > fillChance) continue;
-                TrySpawnAt(pos);
+                var t = transform.Find("_OreRoot");
+                oreRoot = t ? t as Transform : new GameObject("_OreRoot").transform;
+                oreRoot.SetParent(transform, false);
             }
         }
 
-        private void RefillIfNeeded()
+        private void TryInferRadius()
         {
-            int alive = CountAlive();
-            if (alive >= minAliveToRefill) return;
+            if (!orePrefab) return;
+            var col = orePrefab.GetComponent<CircleCollider2D>();
+            if (col) _oreRadius = Mathf.Abs(col.radius) * orePrefab.transform.lossyScale.x;
+        }
 
-            // 시작 인덱스를 랜덤으로 — 항상 좌상단부터 채우는 현상 방지
-            int start = Random.Range(0, slots.Count);
+        private void BuildWorldRect()
+        {
+            if (!targetCamera) return;
+            float halfH = targetCamera.orthographicSize;
+            float halfW = halfH * targetCamera.aspect;
+            Vector2 c = targetCamera.transform.position;
+            _worldRect = new Rect(c.x - halfW, c.y - halfH, halfW * 2f, halfH * 2f);
+        }
 
-            for (int i = 0; i < slots.Count && alive < minAliveToRefill; i++)
+        private Rect InnerRect() => new Rect(
+            _worldRect.xMin + borderPadding,
+            _worldRect.yMin + borderPadding,
+            _worldRect.width - borderPadding * 2f,
+            _worldRect.height - borderPadding * 2f
+        );
+
+        private void Respawn(int target)
+        {
+            Clear();
+            BuildWorldRect();
+            InternalSpawn(target, incremental: false);
+        }
+
+        private void TopUpTo(int target)
+        {
+            BuildWorldRect();
+            int have = oreRoot.childCount;
+            if (have >= target) return;
+            InternalSpawn(target - have, incremental: true);
+        }
+
+        private void InternalSpawn(int need, bool incremental)
+        {
+            if (!orePrefab || !oreRoot || !targetCamera) return;
+            if (need <= 0) return;
+
+            Rect inner = InnerRect();
+
+            float diameter = Mathf.Max(_oreRadius * 2f, 0.1f);
+            float cellW = Mathf.Max(diameter + extraPadding, cellX);
+            float cellH = Mathf.Max(diameter + extraPadding, cellY);
+
+            int cols = Mathf.Max(1, Mathf.FloorToInt(inner.width / cellW));
+            int rows = Mathf.Max(1, Mathf.FloorToInt(inner.height / cellH));
+
+            // Pass A: Grid centers (no overlap)
+            need -= SpawnFromCandidates(BuildGridCenters(inner, cols, rows, jitter),
+                                        need,
+                                        _oreRadius * 0.98f);
+
+            // Pass B: Edge layer
+            if (need > 0 && enableEdgeLayer)
+                need -= SpawnFromCandidates(BuildEdgeCandidates(inner, cols, rows, jitter * 0.7f),
+                                            need,
+                                            _oreRadius * minRadiusFactor);
+
+            // Pass C: Corner layer
+            if (need > 0 && enableCornerLayer)
+                need -= SpawnFromCandidates(BuildCornerCandidates(inner, cols, rows, jitter * 0.6f),
+                                            need,
+                                            _oreRadius * minRadiusFactor);
+
+            // Pass D: Random fill (slight overlap allowed)
+            if (need > 0 && enableRandomFill)
+                need -= SpawnFromCandidates(BuildRandomCandidates(inner, need * 10),
+                                            need,
+                                            _oreRadius * Mathf.Clamp(minRadiusFactor * 0.85f, 0.45f, 1.0f));
+        }
+
+        // -------------- candidates & spawn --------------
+        private int SpawnFromCandidates(List<Vector2> candidates, int quota, float overlapRadius)
+        {
+            if (candidates == null || candidates.Count == 0 || quota <= 0) return 0;
+
+            // Fisher–Yates shuffle (seed salt로 프레임 간 다양화)
+            Shuffle(candidates);
+
+            int placed = 0;
+            int layer = LayerMask.GetMask("Ore");
+            foreach (var pos in candidates)
             {
-                int idx = (start + i) % slots.Count;
-                var slot = slots[idx];
+                if (placed >= quota) break;
+                if (Physics2D.OverlapCircle(pos, overlapRadius, layer) != null) continue;
+                Instantiate(orePrefab, pos, Quaternion.identity, oreRoot);
+                placed++;
+            }
+            _rngSeedSalt++; // 다음 호출 셔플 다양화
+            return placed;
+        }
 
-                if (!HasOreNear(slot, effectiveRadius) && TrySpawnAt(slot))
-                    alive++;
+        private List<Vector2> BuildGridCenters(Rect inner, int cols, int rows, float j)
+        {
+            var list = new List<Vector2>(cols * rows);
+            float stepX = inner.width / cols;
+            float stepY = inner.height / rows;
+
+            // 모든 셀의 중심을 후보로
+            for (int r = 0; r < rows; ++r)
+                for (int c = 0; c < cols; ++c)
+                {
+                    Vector2 center = new Vector2(
+                        inner.xMin + (c + 0.5f) * stepX,
+                        inner.yMin + (r + 0.5f) * stepY
+                    );
+                    // 셀 내부 소폭 흔들기
+                    center += new Vector2(
+                        RandomRangeSym(j),
+                        RandomRangeSym(j)
+                    );
+                    list.Add(center);
+                }
+            return list;
+        }
+
+        private List<Vector2> BuildEdgeCandidates(Rect inner, int cols, int rows, float j)
+        {
+            var list = new List<Vector2>(cols * rows);
+            float stepX = inner.width / cols;
+            float stepY = inner.height / rows;
+
+            for (int r = 0; r < rows; ++r)
+                for (int c = 0; c < cols; ++c)
+                {
+                    Vector2 baseCenter = new Vector2(
+                        inner.xMin + (c + 0.5f) * stepX,
+                        inner.yMin + (r + 0.5f) * stepY
+                    );
+
+                    bool useVertical = ((r + c) & 1) == 0;
+                    Vector2 pos = baseCenter;
+                    if (useVertical) pos.x += (Random.value < 0.5f ? -0.5f : 0.5f) * (stepX * 0.48f);
+                    else pos.y += (Random.value < 0.5f ? -0.5f : 0.5f) * (stepY * 0.48f);
+
+                    pos += new Vector2(RandomRangeSym(j), RandomRangeSym(j));
+                    list.Add(pos);
+                }
+            return list;
+        }
+
+        private List<Vector2> BuildCornerCandidates(Rect inner, int cols, int rows, float j)
+        {
+            var list = new List<Vector2>(cols * rows);
+            float stepX = inner.width / cols;
+            float stepY = inner.height / rows;
+
+            for (int r = 0; r < rows; ++r)
+                for (int c = 0; c < cols; ++c)
+                {
+                    Vector2 baseCenter = new Vector2(
+                        inner.xMin + (c + 0.5f) * stepX,
+                        inner.yMin + (r + 0.5f) * stepY
+                    );
+
+                    float sx = ((c & 1) == 0) ? 0.25f : -0.25f;
+                    float sy = ((r & 1) == 0) ? -0.25f : 0.25f;
+
+                    Vector2 pos = baseCenter + new Vector2(stepX * sx, stepY * sy);
+                    pos += new Vector2(RandomRangeSym(j), RandomRangeSym(j));
+                    list.Add(pos);
+                }
+            return list;
+        }
+
+        private List<Vector2> BuildRandomCandidates(Rect inner, int count)
+        {
+            var list = new List<Vector2>(count);
+            for (int i = 0; i < count; i++)
+            {
+                list.Add(new Vector2(
+                    Random.Range(inner.xMin, inner.xMax),
+                    Random.Range(inner.yMin, inner.yMax)
+                ));
+            }
+            return list;
+        }
+
+        // -------------- utils --------------
+        private void Shuffle(List<Vector2> list)
+        {
+            // frame/seed salt를 섞어 반복 실행에도 패턴화 방지
+            int n = list.Count;
+            int seed = (int)(Time.frameCount * 73856093 ^ _rngSeedSalt * 19349663);
+            System.Random rng = new System.Random(seed);
+            while (n > 1)
+            {
+                int k = rng.Next(n--);
+                (list[n], list[k]) = (list[k], list[n]);
             }
         }
 
-        // ====== Helpers ======
-        private int CountAlive()
-        {
-            int cnt = 0;
-            foreach (Transform child in transform)
-                if (child != null) cnt++;
-            return cnt;
-        }
+        private static float RandomRangeSym(float a) => (Random.value * 2f - 1f) * a;
 
-        private bool TrySpawnAt(Vector3 slotPos)
-        {
-            if (!orePrefab) return false;
-
-            // 슬롯 기준으로 약간의 지터
-            Vector3 pos = slotPos + (Vector3)new Vector2(
-                Random.Range(-jitter.x, jitter.x),
-                Random.Range(-jitter.y, jitter.y));
-
-            if (preventOverlap && HasOreNear(pos, effectiveRadius))
-                return false;
-
-            var o = Instantiate(orePrefab, pos, Quaternion.identity, transform);
-            if (!o) return false;
-
-            // 안전장치: 프리팹과 모든 자식의 레이어를 Ore로 강제 세팅
-            if (oreLayerIndex >= 0)
-                SetLayerRecursively(o.gameObject, oreLayerIndex);
-
-            return true;
-        }
-
-        private bool HasOreNear(Vector3 pos, float radius)
-        {
-            int mask = (oreLayerIndex < 0) ? ~0 : (1 << oreLayerIndex);
-            var col = Physics2D.OverlapCircle(pos, radius, mask);
-            return col != null;
-        }
-
-        private Vector2 GetTileSize()
-        {
-            if (tileSizeSource == TileSizeSource.ManualTileSize)
-                return manualTileSize;
-
-            if (orePrefab != null &&
-                orePrefab.TryGetComponent<SpriteRenderer>(out var sr) &&
-                sr.sprite != null)
-                return sr.bounds.size;
-
-            return new Vector2(1f, 1f);
-        }
-
-        private static void SetLayerRecursively(GameObject go, int layer)
-        {
-            go.layer = layer;
-            for (int i = 0; i < go.transform.childCount; i++)
-                SetLayerRecursively(go.transform.GetChild(i).gameObject, layer);
-        }
-
-        // 디버그: 씬에서 반경 확인용
+#if UNITY_EDITOR
         private void OnDrawGizmosSelected()
         {
-            Gizmos.color = new Color(0f, 1f, 1f, 0.25f);
-            foreach (var s in slots)
-                Gizmos.DrawWireSphere(s, effectiveRadius);
+            if (!targetCamera) return;
+            BuildWorldRect();
+            Gizmos.color = new Color(0f, 1f, 1f, 0.15f);
+            Gizmos.DrawCube(_worldRect.center, _worldRect.size);
+
+            Rect inner = InnerRect();
+            Gizmos.color = new Color(1f, 1f, 0f, 0.18f);
+            Gizmos.DrawCube(inner.center, inner.size);
         }
+#endif
     }
 }

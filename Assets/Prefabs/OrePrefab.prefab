@@ -137,20 +137,19 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9cadfd5fc4fd4eb4fb024f27ea1754ec, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  maxHP: 10
-  destroyOnDeath: 1
-  baseColor: {r: 0.5, g: 0.9, b: 1, a: 1}
-  minedTint: {r: 0.15, g: 0.6, b: 1, a: 1}
-  hitScale: 1.12
-  relaxSpeed: 10
-  rewards:
-  - type: 0
-    min: 1
-    max: 3
-    weight: 1
-  barSpriteOverride: {fileID: 0}
-  barWidth: 0.9
-  barHeight: 0.12
-  barYOffset: -0.7
-  barBackColor: {r: 0, g: 0, b: 0, a: 0.75}
-  barFillColor: {r: 1, g: 0.25, b: 0.25, a: 1}
+  maxHp: 30
+  destroyOnBreak: 1
+  wobbleOnHit: 1
+  wobblePos: 0.035
+  wobbleScale: 0.06
+  wobbleDuration: 0.08
+  showHpBar: 1
+  barAbove: 0
+  barYOffset: -0.6
+  barSize: {x: 0.7, y: 0.1}
+  barColor: {r: 1, g: 0, b: 0.13981152, a: 1}
+  barBgColor: {r: 0, g: 0, b: 0, a: 0.75}
+  barSortingOffsetBG: 90
+  barSortingOffsetFill: 100
+  minOnePixelThickness: 0
+  referencePPU: 128
