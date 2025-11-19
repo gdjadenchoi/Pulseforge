@@ -307,7 +307,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   resourceText: {fileID: 8616171306843965352}
   rewardManager: {fileID: 0}
+  showAllTypes: 1
   rewardType: 0
+  singleFormat: '{label} {value}'
+  allJoinSeparator: '  |  '
+  labelOverride: 
+  refreshInterval: 0.1
 --- !u!1 &6223789542225472407
 GameObject:
   m_ObjectHideFlags: 0
@@ -369,4 +374,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   resourceText: {fileID: 0}
   rewardManager: {fileID: 0}
+  showAllTypes: 0
   rewardType: 0
+  singleFormat: '{label} {value}'
+  allJoinSeparator: '  |  '
+  labelOverride: 
+  refreshInterval: 0.1

@@ -1,105 +1,115 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace Pulseforge.Systems
 {
     /// <summary>
-    /// 한 세션 동안 활성 Ore 수를 유지(리스폰)하고,
-    /// 수량에 따라 Grid/Scatter를 자동 전환(하이브리드)하는 스포너.
+    /// Ore(광석)를 원형 범위 안에 스폰/유지하는 스포너.
+    /// - 최소 활성 개수 유지 (Min Active Count)
+    /// - 하드캡 (Hard Cap)
+    /// - Grid / Scatter / Hybrid 배치
+    /// - SessionController의 세션 시작/종료 이벤트에 반응
     /// </summary>
     public class OreSpawner : MonoBehaviour
     {
-        // ====== 기본 스폰 설정 ======
-        [Header("Spawn Settings")]
-        [Tooltip("생성할 Ore 프리팹")]
-        public GameObject orePrefab;
+        // ---------- 인스펙터 ----------
 
-        [Tooltip("씬 중앙(스포너 기준) 원형 영역 반지름")]
+        [Header("Spawn Settings")]
+        public GameObject orePrefab;
+        [Tooltip("스폰 범위 반경(월드 유닛).")]
         public float radius = 5f;
 
-        [Tooltip("세션 시작 시 보장할 최소 활성 수량 (리스폰 유지 기준)")]
-        public int minActiveCount = 12;
+        [Tooltip("항상 유지하고 싶은 최소 Ore 개수.")]
+        public int minActiveCount = 8;
 
-        [Tooltip("강제 상한 (업그레이드/시간 램프 포함 후 캡)")]
+        [Tooltip("씬에서 동시에 존재할 수 있는 Ore의 절대 최대 개수.")]
         public int hardCap = 200;
 
-        // ====== 배치 모드 ======
-        public enum SpawnMode { GridOnly, ScatterOnly, Hybrid }
+        public enum SpawnMode
+        {
+            Grid,
+            Scatter,
+            Hybrid
+        }
+
         [Header("Placement Mode")]
         public SpawnMode spawnMode = SpawnMode.Hybrid;
 
-        [Tooltip("하이브리드 전환 임계치 (활성 수량이 이 값 미만이면 Grid, 이상이면 Scatter)")]
+        [Tooltip("현재 활성 개수가 이 값보다 작을 때는 Grid, 이상일 때는 Scatter 모드로 전환.")]
         public int hybridThreshold = 24;
 
         [Header("Grid Placement")]
-        [Tooltip("타일(셀) 크기(월드 단위). Ore 크기에 맞춰 0.5~1.2 정도 추천")]
-        public float cellSize = 1.0f;
+        [Tooltip("Grid 모드에서 사용하는 셀 크기.")]
+        public float cellSize = 1f;
 
-        [Tooltip("그리드 배치 시 약간의 랜덤 흔들림(0이면 완전 격자)")]
-        [Range(0f, 0.49f)] public float gridJitter = 0.12f;
+        [Range(0f, 0.5f)]
+        [Tooltip("Grid 좌표에서 얼마나 랜덤으로 위치를 흔들지 비율(0~0.5).")]
+        public float gridJitter = 0.12f;
 
         [Header("Scatter Placement")]
-        [Tooltip("스캐터 충돌 반경(겹침 방지). Ore 반지름보다 약간 작거나 비슷하게")]
+        [Tooltip("다른 Ore와 이 거리 미만으로 겹치지 않도록 시도.")]
         public float noOverlapRadius = 0.35f;
 
-        [Tooltip("스캐터 시 포지션 재시도 횟수")]
+        [Tooltip("NoOverlap 조건을 만족하는 위치를 찾기 위해 시도할 최대 횟수.")]
         public int scatterMaxTries = 12;
 
-        [Tooltip("오버랩 검사에 사용할 레이어마스크(없으면 모든 충돌체 검사)")]
-        public LayerMask overlapMask = default;
+        [Tooltip("겹침 체크에 사용할 레이어 마스크 (주로 Ore 레이어).")]
+        public LayerMask overlapMask = 0;
 
-        // ====== 업그레이드 계수 ======
         [Header("Upgrade Modifiers")]
-        [Tooltip("고정 보정치 (예: 업그레이드로 +n)")]
+        [Tooltip("추후 아웃게임 업그레이드에서 추가로 더해질 개수.")]
         public int upgradeFlatBonus = 0;
 
-        [Tooltip("배수 보정 (예: 업그레이드로 x1.25)")]
+        [Tooltip("추후 업그레이드에서 곱해질 멀티플라이어.")]
         public float upgradeMultiplier = 1f;
 
-        // ====== 시간 램프(테스트/메타 진행용) ======
         [Header("Time Ramp (Optional)")]
+        [Tooltip("시간이 지나면서 더 많은 Ore를 추가하고 싶을 때 사용.")]
         public bool timeRampEnabled = false;
 
-        [Tooltip("N초마다 AddAmount 만큼 최대치 상향(SoftCap을 키우는 개념)")]
+        [Tooltip("N초마다 Ore를 Add Amount만큼 추가.")]
         public float addEveryNSeconds = 10f;
 
-        [Tooltip("N초마다 늘리는 양")]
         public int addAmount = 5;
-
-        [Tooltip("시간 램프로 추가할 수 있는 최대치(SoftCap 누적 상한)")]
         public int maxExtra = 50;
 
-        // ====== 런타임 상태 ======
-        private SessionController _session;       // IsRunning 만 사용
-        private readonly List<Transform> _pool = new(); // 자식 중 살아있는 Ore Transform 캐시
-        private float _timer;
-        private int _softCapExtra;                // 시간 램프로 늘어난 추가치 누적
+        // ---------- 내부 상태 ----------
 
-        private int EffectiveTargetCount =>
-            Mathf.Min(
-                Mathf.RoundToInt(minActiveCount * upgradeMultiplier) + upgradeFlatBonus + _softCapExtra,
-                hardCap
-            );
+        SessionController _session;
+        float _timer;
+        int _extraSpawned; // time ramp로 추가된 개수
 
-        private void Awake()
+        void Awake()
         {
-            _pool.Clear();
-            for (int i = 0; i < transform.childCount; i++)
+            _session = FindObjectOfType<SessionController>();
+
+            if (_session != null)
             {
-                var t = transform.GetChild(i);
-                if (t != null) _pool.Add(t);
+                _session.OnSessionStart += HandleSessionStart;
+                _session.OnSessionEnd += HandleSessionEnd;
             }
         }
 
-        private void Start()
+        void OnDestroy()
         {
-            _session = FindObjectOfType<SessionController>();
-            TopUpToTarget(forceGrid: true);
+            if (_session != null)
+            {
+                _session.OnSessionStart -= HandleSessionStart;
+                _session.OnSessionEnd -= HandleSessionEnd;
+            }
         }
 
-        private void Update()
+        void Start()
         {
-            if (_session != null && !_session.IsRunning) return;
+            // 첫 세션 시작 전에도 한 번 세팅
+            HandleSessionStart();
+        }
+
+        void Update()
+        {
+            if (_session == null || !_session.IsRunning)
+                return;
+
+            MaintainMinimumCount();
 
             if (timeRampEnabled)
             {
@@ -107,164 +117,162 @@ namespace Pulseforge.Systems
                 if (_timer >= addEveryNSeconds)
                 {
                     _timer = 0f;
-                    _softCapExtra = Mathf.Min(_softCapExtra + addAmount, maxExtra);
+                    TryAddExtra(addAmount);
                 }
             }
-
-            PruneNulls();
-            TopUpToTarget();
         }
 
-        // 목표 수량까지 보충
-        private void TopUpToTarget(bool forceGrid = false)
+        // ---------- 세션 이벤트 ----------
+
+        void HandleSessionStart()
         {
-            int target = EffectiveTargetCount;
-            int active = _pool.Count;
-            int need = target - active;
-            if (need <= 0) return;
+            _timer = 0f;
+            _extraSpawned = 0;
+            ClearAllOres();
+            SpawnInitial();
+        }
 
-            SpawnMode mode = spawnMode;
-            if (mode == SpawnMode.Hybrid)
-                mode = (active < hybridThreshold || forceGrid) ? SpawnMode.GridOnly : SpawnMode.ScatterOnly;
+        void HandleSessionEnd()
+        {
+            ClearAllOres();
+        }
 
-            switch (mode)
+        // ---------- 스폰 로직 ----------
+
+        void SpawnInitial()
+        {
+            int target = Mathf.RoundToInt(minActiveCount * upgradeMultiplier) + upgradeFlatBonus;
+            target = Mathf.Max(0, target);
+            target = Mathf.Min(target, hardCap);
+
+            for (int i = 0; i < target; i++)
             {
-                case SpawnMode.GridOnly: SpawnGrid(need); break;
-                case SpawnMode.ScatterOnly: SpawnScatter(need); break;
-                default: SpawnGrid(need); break;
+                SpawnOne();
             }
         }
 
-        // === Grid 배치 ===
-        private void SpawnGrid(int toSpawn)
+        void MaintainMinimumCount()
         {
-            var candidates = BuildGridCandidates();
-            Shuffle(candidates);
+            int current = transform.childCount;
+            int targetMin = Mathf.RoundToInt(minActiveCount * upgradeMultiplier) + upgradeFlatBonus;
+            targetMin = Mathf.Clamp(targetMin, 0, hardCap);
 
-            int spawned = 0;
-            foreach (var pos in candidates)
+            int needed = targetMin - current;
+            if (needed <= 0)
+                return;
+
+            for (int i = 0; i < needed; i++)
             {
-                if (TrySpawnAt(pos))
+                SpawnOne();
+            }
+        }
+
+        void TryAddExtra(int amount)
+        {
+            int maxTotal = Mathf.Clamp(minActiveCount + maxExtra, 0, hardCap);
+            int current = transform.childCount;
+
+            int canAdd = Mathf.Min(amount, maxTotal - current);
+            if (canAdd <= 0)
+                return;
+
+            for (int i = 0; i < canAdd; i++)
+            {
+                SpawnOne();
+                _extraSpawned++;
+            }
+        }
+
+        void ClearAllOres()
+        {
+            for (int i = transform.childCount - 1; i >= 0; i--)
+            {
+                var child = transform.GetChild(i);
+                if (Application.isPlaying)
+                    Destroy(child.gameObject);
+                else
+                    DestroyImmediate(child.gameObject);
+            }
+        }
+
+        void SpawnOne()
+        {
+            if (orePrefab == null)
+                return;
+
+            Transform parent = _session != null && _session.oreRootOverride != null
+                ? _session.oreRootOverride
+                : transform;
+
+            Vector2 pos = GetSpawnPosition();
+            Instantiate(orePrefab, pos, Quaternion.identity, parent);
+        }
+
+        Vector2 GetSpawnPosition()
+        {
+            switch (spawnMode)
+            {
+                case SpawnMode.Grid:
+                    return GetGridPosition();
+                case SpawnMode.Scatter:
+                    return GetScatterPosition();
+                case SpawnMode.Hybrid:
+                    int current = transform.childCount;
+                    if (current < hybridThreshold)
+                        return GetGridPosition();
+                    else
+                        return GetScatterPosition();
+                default:
+                    return GetScatterPosition();
+            }
+        }
+
+        Vector2 GetGridPosition()
+        {
+            // 원 안에 들어오는 grid 셀을 대충 골라서 jitter를 준다.
+            for (int tries = 0; tries < 12; tries++)
+            {
+                float maxCell = radius / Mathf.Max(0.001f, cellSize);
+                int gx = Random.Range(Mathf.CeilToInt(-maxCell), Mathf.FloorToInt(maxCell) + 1);
+                int gy = Random.Range(Mathf.CeilToInt(-maxCell), Mathf.FloorToInt(maxCell) + 1);
+
+                Vector2 basePos = new Vector2(gx, gy) * cellSize;
+
+                if (basePos.magnitude > radius)
+                    continue;
+
+                // jitter
+                float jitterRange = cellSize * gridJitter;
+                basePos.x += Random.Range(-jitterRange, jitterRange);
+                basePos.y += Random.Range(-jitterRange, jitterRange);
+
+                return (Vector2)transform.position + basePos;
+            }
+
+            // 실패 시 그냥 Scatter 방식으로
+            return GetScatterPosition();
+        }
+
+        Vector2 GetScatterPosition()
+        {
+            // NoOverlapRadius가 0이면 단순 Random.insideUnitCircle
+            if (noOverlapRadius <= 0f || overlapMask.value == 0)
+            {
+                return (Vector2)transform.position + Random.insideUnitCircle * radius;
+            }
+
+            for (int i = 0; i < scatterMaxTries; i++)
+            {
+                Vector2 candidate = (Vector2)transform.position + Random.insideUnitCircle * radius;
+
+                if (!Physics2D.OverlapCircle(candidate, noOverlapRadius, overlapMask))
                 {
-                    spawned++;
-                    if (spawned >= toSpawn) break;
+                    return candidate;
                 }
             }
 
-            // 후보가 모자라면 스캐터로 보충
-            if (spawned < toSpawn)
-                SpawnScatter(toSpawn - spawned);
-        }
-
-        private List<Vector2> BuildGridCandidates()
-        {
-            var list = new List<Vector2>(256);
-            float half = radius;
-            int xn = Mathf.Max(1, Mathf.CeilToInt((half * 2f) / cellSize));
-            int yn = xn;
-            Vector2 origin = transform.position;
-
-            for (int yi = 0; yi < yn; yi++)
-                for (int xi = 0; xi < xn; xi++)
-                {
-                    float px = -half + (xi + 0.5f) * cellSize;
-                    float py = -half + (yi + 0.5f) * cellSize;
-                    var p = new Vector2(origin.x + px, origin.y + py);
-
-                    if ((p - origin).sqrMagnitude <= radius * radius)
-                    {
-                        if (gridJitter > 0f)
-                            p += Random.insideUnitCircle * gridJitter;
-                        list.Add(p);
-                    }
-                }
-            return list;
-        }
-
-        // === Scatter 배치 ===
-        private void SpawnScatter(int toSpawn)
-        {
-            Vector2 center = transform.position;
-
-            for (int i = 0; i < toSpawn; i++)
-            {
-                bool placed = false;
-
-                for (int tries = 0; tries < scatterMaxTries; tries++)
-                {
-                    Vector2 p = center + Random.insideUnitCircle * radius;
-                    if (IsPositionFree(p))
-                    {
-                        TrySpawnAt(p);
-                        placed = true;
-                        break;
-                    }
-                }
-
-                if (!placed) // 끝내 못찾으면 한 번은 그냥 배치(밀집 허용)
-                {
-                    Vector2 p = center + Random.insideUnitCircle * radius;
-                    TrySpawnAt(p, checkOverlap: false);
-                }
-            }
-        }
-
-        // === 공통 ===
-        private bool TrySpawnAt(Vector2 pos, bool checkOverlap = true)
-        {
-            if (orePrefab == null) return false;
-            if (checkOverlap && !IsPositionFree(pos)) return false;
-
-            var go = Instantiate(orePrefab, pos, Quaternion.identity, transform);
-            _pool.Add(go.transform);
-            return true;
-        }
-
-        private bool IsPositionFree(Vector2 pos)
-        {
-            if (noOverlapRadius <= 0f) return true;
-            var hit = Physics2D.OverlapCircle(pos, noOverlapRadius, overlapMask);
-            return hit == null;
-        }
-
-        private void PruneNulls()
-        {
-            for (int i = _pool.Count - 1; i >= 0; i--)
-                if (_pool[i] == null) _pool.RemoveAt(i);
-        }
-
-        private static void Shuffle<T>(IList<T> list)
-        {
-            for (int i = 0; i < list.Count; i++)
-            {
-                int j = Random.Range(i, list.Count);
-                (list[i], list[j]) = (list[j], list[i]);
-            }
-        }
-
-        private void OnDrawGizmosSelected()
-        {
-            Gizmos.color = new Color(0.2f, 0.7f, 1f, 0.25f);
-            Gizmos.DrawWireSphere(transform.position, radius);
-
-            if (spawnMode == SpawnMode.GridOnly || spawnMode == SpawnMode.Hybrid)
-            {
-                Gizmos.color = new Color(0.2f, 1f, 0.5f, 0.15f);
-                float half = radius;
-                int xn = Mathf.Max(1, Mathf.CeilToInt((half * 2f) / Mathf.Max(0.01f, cellSize)));
-                int yn = xn;
-                Vector2 origin = transform.position;
-
-                for (int yi = 0; yi < yn; yi++)
-                    for (int xi = 0; xi < xn; xi++)
-                    {
-                        float px = -half + (xi + 0.5f) * cellSize;
-                        float py = -half + (yi + 0.5f) * cellSize;
-                        var p = new Vector2(origin.x + px, origin.y + py);
-                        if ((p - origin).sqrMagnitude <= radius * radius)
-                            Gizmos.DrawSphere(p, 0.05f);
-                    }
-            }
+            // 여러 번 실패하면 그냥 마지막 위치 리턴
+            return (Vector2)transform.position + Random.insideUnitCircle * radius;
         }
     }
 }

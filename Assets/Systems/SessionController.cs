@@ -1,103 +1,143 @@
-using System;
+ï»¿using System;
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace Pulseforge.Systems
 {
-    /// <summary>
-    /// ¼¼¼Ç ´ÜÀ§ Å¸ÀÌ¸Ó¸¦ °ü¸®.
-    /// - ±âº» ½Ã°£ + ¾÷±×·¹ÀÌµå Ãß°¡½Ã°£
-    /// - OnSessionStart / OnTimeChanged / OnCritical / OnSessionEnd ÀÌº¥Æ® ¹ßÇà
-    /// </summary>
     public class SessionController : MonoBehaviour
     {
-        [Header("Session Settings")]
-        [Tooltip("±âº» ¼¼¼Ç ½Ã°£ (ÃÊ)")]
-        public float baseDuration = 15f;
+        [Header("Session Time")]
+        [Min(1f)] public float baseDurationSec = 15f;
+        [Min(0f)] public float criticalThreshold = 3f;
 
-        [Tooltip("¾÷±×·¹ÀÌµå·Î Ãß°¡µÈ ½Ã°£ (ÃÊ)")]
-        public float extraDuration = 0f;
+        [Header("Scene Refs (Optional)")]
+        public Transform oreRootOverride;
+        public Behaviour drillCursor;   // DrillCursor ì»´í¬ë„ŒíŠ¸ ë„£ì–´ë‘ë©´ ë¨
 
-        [Tooltip("ÀÚµ¿À¸·Î ½ÃÀÛÇÒÁö ¿©ºÎ")]
-        public bool autoStart = true;
+        // ----- ìƒíƒœ & í”„ë¡œí¼í‹° -----
+        public bool IsRunning { get; private set; }
+        public float Remaining { get; private set; }
 
-        [Tooltip("3ÃÊ ÀÌÇÏÀÏ ¶§ °æ°í »óÅÂ·Î ÁøÀÔ")]
-        public float criticalThreshold = 3f;
-
-        [Tooltip("½Ã°£ Èå¸§ ¹è¼Ó (µğ¹ö±×¿ë)")]
-        public float timeScale = 1f;
-
-        [Tooltip("Æ÷Ä¿½º¸¦ ÀÒÀ¸¸é ÀÏ½ÃÁ¤Áö")]
-        public bool pauseOnFocusLost = true;
-
+        // remaining, normalized(0~1)
         public event Action OnSessionStart;
-        public event Action<float, float> OnTimeChanged;
-        public event Action<float> OnCritical;
         public event Action OnSessionEnd;
+        public event Action<float, float> OnTimeChanged;
+        public event Action<float> OnCritical;   // í¬ë¦¬í‹°ì»¬ ìˆœê°„ í•œ ë²ˆ í˜¸ì¶œ
 
-        private float _remaining;
-        private bool _isRunning;
-        private bool _criticalTriggered;
-        private bool _paused;
+        bool _firedCritical;
+        RewardManager _rewards;
+        OreSpawner _spawner;
 
-        public float Remaining => Mathf.Max(0, _remaining);
-        public float Duration => baseDuration + extraDuration;
-        public bool IsRunning => _isRunning;
-
-        private void Start()
+        void Awake()
         {
-            if (autoStart)
-                StartSession();
+            _rewards = RewardManager.Instance;
+#if UNITY_6000_0_OR_NEWER
+            _spawner = FindFirstObjectByType<OreSpawner>(FindObjectsInactive.Exclude);
+#else
+            _spawner = FindObjectOfType<OreSpawner>();
+#endif
         }
 
-        private void Update()
+        void Start()
         {
-            if (!_isRunning || _paused) return;
+            StartSession();
+        }
 
-            _remaining -= Time.deltaTime * timeScale;
-            _remaining = Mathf.Max(0, _remaining);
+        void Update()
+        {
+            if (!IsRunning) return;
 
-            float normalized = Mathf.Clamp01(_remaining / Duration);
-            OnTimeChanged?.Invoke(_remaining, normalized);
+            Remaining -= Time.deltaTime;
+            if (Remaining < 0f) Remaining = 0f;
 
-            if (!_criticalTriggered && _remaining <= criticalThreshold)
+            float normalized = baseDurationSec <= 0f
+                ? 0f
+                : Mathf.Clamp01(Remaining / baseDurationSec);
+
+            OnTimeChanged?.Invoke(Remaining, normalized);
+
+            if (!_firedCritical && Remaining <= criticalThreshold)
             {
-                _criticalTriggered = true;
-                OnCritical?.Invoke(_remaining);
+                _firedCritical = true;
+                OnCritical?.Invoke(Remaining);
             }
 
-            if (_remaining <= 0)
+            if (Remaining <= 0f)
             {
                 EndSession();
             }
         }
 
+        // ----- ì„¸ì…˜ ì œì–´ -----
+
         public void StartSession()
         {
-            _remaining = Duration;
-            _isRunning = true;
-            _criticalTriggered = false;
-            _paused = false;
+            Remaining = baseDurationSec;
+            _firedCritical = false;
+            IsRunning = true;
+
+            if (drillCursor) drillCursor.enabled = true;
 
             OnSessionStart?.Invoke();
-            OnTimeChanged?.Invoke(_remaining, 1f);
         }
 
         public void EndSession()
         {
-            if (!_isRunning) return;
-            _isRunning = false;
+            if (!IsRunning) return;
+
+            Debug.Log("[SessionController] EndSession() called");  // â˜… ì¶”ê°€ 1
+
+            IsRunning = false;
+            if (drillCursor) drillCursor.enabled = false;
+
+            // ë³´ìƒ ìŠ¤ëƒ…ìƒ·
+            IReadOnlyDictionary<RewardType, int> snapshot =
+                _rewards != null ? _rewards.GetAll() : new Dictionary<RewardType, int>();
+
+#if UNITY_6000_0_OR_NEWER
+            var popup = FindFirstObjectByType<Pulseforge.UI.SessionEndPopup>(FindObjectsInactive.Include);
+#else
+            var popup = FindObjectOfType<Pulseforge.UI.SessionEndPopup>(true);
+#endif
+
+            Debug.Log("[SessionController] popup found? " + (popup != null)); // â˜… ì¶”ê°€ 2
+
+            if (popup != null)
+            {
+                popup.Show(snapshot, this);
+            }
+
+            ClearWorld();
             OnSessionEnd?.Invoke();
         }
 
-        public void RestartSession()
+        // Ore ì •ë¦¬ (OreSpawnerê°€ ì‚¬ìš©í•˜ëŠ” rootì™€ ë§ì¶°ì¤Œ)
+        public void ClearWorld()
         {
-            StartSession();
+            Transform root =
+                oreRootOverride != null ? oreRootOverride :
+                _spawner ? _spawner.transform :
+                null;
+
+            if (!root) return;
+
+            for (int i = root.childCount - 1; i >= 0; i--)
+            {
+                Destroy(root.GetChild(i).gameObject);
+            }
         }
 
-        private void OnApplicationFocus(bool hasFocus)
+        // ì”¬ ì „ì²´ ë¦¬ìŠ¤íƒ€íŠ¸ìš©(ì§€ê¸ˆì€ ì•ˆ ì¨ë„ ë¨, ë‚¨ê²¨ë‘ )
+        public void RestartSession()
         {
-            if (!pauseOnFocusLost) return;
-            _paused = !hasFocus;
+            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+        }
+
+        // ì—…ê·¸ë ˆì´ë“œ ì”¬ ì „í™˜ìš©(ë‚˜ì¤‘ì— ì—°ê²° ì˜ˆì •)
+        public void GoToUpgrade()
+        {
+            Debug.Log("[SessionController] GoToUpgrade() â€” ì¶”í›„ ì”¬ ì „í™˜ ì—°ê²° ì˜ˆì •");
         }
     }
 }

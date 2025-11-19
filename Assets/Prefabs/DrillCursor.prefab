@@ -28,7 +28,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1751965203994130277}
   serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: -0.46109563, y: 0.077758685, z: 0.006470355}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -125,7 +125,7 @@ CircleCollider2D:
   m_CompositeOperation: 0
   m_CompositeOrder: 0
   m_Offset: {x: 0, y: 0}
-  m_Radius: 0.5
+  m_Radius: 0.4
 --- !u!114 &3088817342774370333
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -139,7 +139,19 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   followLerp: 14
-  mineDps: 6
+  swingInterval: 0.18
+  damagePerSwing: 3
+  radiusSource: 0
+  fixedRadius: 0.45
+  spriteRadiusScale: 1
+  detectPadding: 0.06
+  oreMask:
+    serializedVersion: 2
+    m_Bits: 64
+  cursorRenderer: {fileID: 0}
+  cursorSortingOrder: 100
+  logHitCount: 0
+  gizmoRadiusColor: {r: 1, g: 0.9, b: 0.2, a: 0.3}
 --- !u!50 &1638524194842331464
 Rigidbody2D:
   serializedVersion: 5

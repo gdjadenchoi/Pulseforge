@@ -5,7 +5,7 @@ using Pulseforge.Systems;
 /// <summary>
 /// 세션 남은 시간 표시 UI.
 /// - 기본 흰색
-/// - 3초 이하 시 빨간색 + 깜빡임
+/// - criticalThreshold 이하 시 빨간색 + 깜빡임
 /// </summary>
 public class TimeHUD : MonoBehaviour
 {
@@ -34,9 +34,25 @@ public class TimeHUD : MonoBehaviour
             session.OnCritical += HandleCritical;
             session.OnSessionStart += HandleSessionStart;
             session.OnSessionEnd += HandleSessionEnd;
-        }
 
-        UpdateDisplay(session?.Remaining ?? 0f);
+            // 시작 시 한 번 갱신
+            UpdateDisplay(session.Remaining);
+        }
+        else
+        {
+            UpdateDisplay(0f);
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (session != null)
+        {
+            session.OnTimeChanged -= HandleTimeChanged;
+            session.OnCritical -= HandleCritical;
+            session.OnSessionStart -= HandleSessionStart;
+            session.OnSessionEnd -= HandleSessionEnd;
+        }
     }
 
     private void Update()
@@ -54,7 +70,9 @@ public class TimeHUD : MonoBehaviour
         _isCritical = false;
         _blinkTimer = 0;
         UpdateDisplay(session.Remaining);
-        timeText.color = normalColor;
+        if (timeText != null)
+            timeText.color = normalColor;
+
         gameObject.SetActive(true);
     }
 
@@ -63,6 +81,7 @@ public class TimeHUD : MonoBehaviour
         gameObject.SetActive(false);
     }
 
+    // SessionController.OnTimeChanged(remaining, normalized)
     private void HandleTimeChanged(float remaining, float normalized)
     {
         UpdateDisplay(remaining);
@@ -72,7 +91,7 @@ public class TimeHUD : MonoBehaviour
     {
         _isCritical = true;
         _blinkTimer = 0;
-        if (!blinkOnCritical)
+        if (!blinkOnCritical && timeText != null)
             timeText.color = criticalColor;
     }
 
