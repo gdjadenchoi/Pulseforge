@@ -41,6 +41,7 @@ namespace Pulseforge.Systems
 
         void Start()
         {
+            // 처음 씬에 들어왔을 때 바로 세션 시작
             StartSession();
         }
 
@@ -86,7 +87,7 @@ namespace Pulseforge.Systems
         {
             if (!IsRunning) return;
 
-            Debug.Log("[SessionController] EndSession() called");  // ★ 추가 1
+            Debug.Log("[SessionController] EndSession() called");
 
             IsRunning = false;
             if (drillCursor) drillCursor.enabled = false;
@@ -101,24 +102,57 @@ namespace Pulseforge.Systems
             var popup = FindObjectOfType<Pulseforge.UI.SessionEndPopup>(true);
 #endif
 
-            Debug.Log("[SessionController] popup found? " + (popup != null)); // ★ 추가 2
+            Debug.Log("[SessionController] popup found? " + (popup != null));
+
+            // *** 여기서는 "화면 클리어 + 리스폰 정지" 까지만 ***
+            ClearWorld();
 
             if (popup != null)
             {
+                // 팝업은 클리어된 화면 위에만 뜨고,
+                // MineAgain 버튼을 눌러야만 다시 스폰이 시작되도록 controller를 넘긴다.
                 popup.Show(snapshot, this);
             }
 
-            ClearWorld();
             OnSessionEnd?.Invoke();
         }
 
-        // Ore 정리 (OreSpawner가 사용하는 root와 맞춰줌)
+        /// <summary>
+        /// MineAgain 버튼에서 호출할 재시작 전용 함수.
+        /// 순서: 팝업에서 이 함수 호출 → OreSpawner.StartFresh() → 세션 타이머 StartSession()
+        /// </summary>
+        public void RestartSessionFromPopup()
+        {
+            Debug.Log("[SessionController] RestartSessionFromPopup() called");
+
+            // 1) 광석 스패너를 다시 활성화 + 초기 스폰
+            if (_spawner != null)
+            {
+                _spawner.StartFresh();
+            }
+            else
+            {
+                // 혹시라도 스패너를 못 찾는 상황이면 최소한 기존 월드는 정리
+                ClearWorld();
+            }
+
+            // 2) 세션 타이머 재시작
+            StartSession();
+        }
+
+        // Ore 정리 (OreSpawner와 연동되도록 우선 사용)
         public void ClearWorld()
         {
+            // 스패너가 있으면 스패너에게 "멈추고, 다 지우고, 리스폰도 멈춰" 라고만 시킨다.
+            if (_spawner != null)
+            {
+                _spawner.PauseAndClear();
+                return;
+            }
+
+            // 예외적으로 oreRootOverride만 사용해야 하는 경우를 대비한 폴백
             Transform root =
-                oreRootOverride != null ? oreRootOverride :
-                _spawner ? _spawner.transform :
-                null;
+                oreRootOverride != null ? oreRootOverride : null;
 
             if (!root) return;
 

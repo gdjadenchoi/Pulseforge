@@ -305,18 +305,19 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   orePrefab: {fileID: 1284981850054371760, guid: 05322ff31e12e9b49870e05e15098773, type: 3}
+  initialCount: 12
   radius: 5
-  minActiveCount: 12
-  hardCap: 200
-  spawnMode: 2
-  hybridThreshold: 24
-  cellSize: 1
-  gridJitter: 0.12
-  noOverlapRadius: 0.35
-  scatterMaxTries: 12
-  overlapMask:
-    serializedVersion: 2
-    m_Bits: 64
+  useRectArea: 1
+  areaSize: {x: 5, y: 9}
+  areaOffset: {x: 0, y: 0}
+  minDistance: 0.6
+  maxPlacementAttempts: 30
+  useGrid: 1
+  gridCellSize: 0.5
+  baseTargetCount: 12
+  respawnDelay: 0.3
+  batchMin: 1
+  batchMax: 3
   upgradeFlatBonus: 0
   upgradeMultiplier: 1
   timeRampEnabled: 0
@@ -379,7 +380,7 @@ RectTransform:
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 0}
   m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 260, y: 60}
+  m_SizeDelta: {x: 500, y: 60}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &311063509
 MonoBehaviour:
@@ -994,13 +995,13 @@ MonoBehaviour:
   m_OnClick:
     m_PersistentCalls:
       m_Calls:
-      - m_Target: {fileID: 11500000, guid: 115f35849b59ff84aac9038f702c8782, type: 3}
-        m_TargetAssemblyTypeName: 
-        m_MethodName: 
+      - m_Target: {fileID: 2106649752}
+        m_TargetAssemblyTypeName: Pulseforge.Systems.SessionController, Assembly-CSharp
+        m_MethodName: RestartSessionFromPopup
         m_Mode: 1
         m_Arguments:
           m_ObjectArgument: {fileID: 0}
-          m_ObjectArgumentAssemblyTypeName: 
+          m_ObjectArgumentAssemblyTypeName: UnityEngine.Object, UnityEngine
           m_IntArgument: 0
           m_FloatArgument: 0
           m_StringArgument: 
@@ -1058,7 +1059,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_IgnoreLayout: 0
   m_MinWidth: 120
-  m_MinHeight: 40
+  m_MinHeight: 60
   m_PreferredWidth: -1
   m_PreferredHeight: -1
   m_FlexibleWidth: 1
@@ -1135,7 +1136,7 @@ RectTransform:
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 0}
   m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 200, y: 50}
+  m_SizeDelta: {x: 600, y: 300}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1073833893
 MonoBehaviour:
@@ -2028,11 +2029,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_IgnoreLayout: 0
   m_MinWidth: 120
-  m_MinHeight: 40
+  m_MinHeight: 60
   m_PreferredWidth: -1
   m_PreferredHeight: -1
-  m_FlexibleWidth: -1
-  m_FlexibleHeight: 1
+  m_FlexibleWidth: 1
+  m_FlexibleHeight: -1
   m_LayoutPriority: 1
 --- !u!4 &1868766876 stripped
 Transform:
@@ -2463,7 +2464,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_IgnoreLayout: 0
   m_MinWidth: -1
-  m_MinHeight: 300
+  m_MinHeight: 500
   m_PreferredWidth: -1
   m_PreferredHeight: -1
   m_FlexibleWidth: -1
