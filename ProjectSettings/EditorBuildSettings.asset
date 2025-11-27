@@ -6,11 +6,11 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/Scenes/Pulseforge_Boot.unity
-    guid: f3d984de59ce5cd4ab00cfaff0483a5b
+    path: Assets/Scenes/PF_Outpost.unity
+    guid: 648682a19bf4959429ff2431696e69eb
   - enabled: 1
-    path: Assets/Scenes/SampleScene.unity
-    guid: 2cda990e2423bbf4892e6590ba056729
+    path: Assets/Scenes/PF_Mining.unity
+    guid: bc389d8ec6ed6444da16226aad22df0b
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 3590b91b4603b465dbb4216d601bff33, type: 3}
   m_UseUCBPForAssetBundles: 0

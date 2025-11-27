@@ -3,6 +3,7 @@ using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 using Pulseforge.Systems;   // RewardType
 
 namespace Pulseforge.UI
@@ -10,16 +11,16 @@ namespace Pulseforge.UI
     public class SessionEndPopup : MonoBehaviour
     {
         [Header("Wiring")]
-        [Tooltip("ÆË¾÷ ÀüÃ¼¸¦ °¨½Î´Â À©µµ¿ì(ÆÐ³Î) ¿ÀºêÁ§Æ®")]
+        [Tooltip("ï¿½Ë¾ï¿½ ï¿½ï¿½Ã¼ï¿½ï¿½ ï¿½ï¿½ï¿½Î´ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½(ï¿½Ð³ï¿½) ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ®")]
         public GameObject panel;
 
-        [Tooltip("°á°ú ¿ä¾àÀ» º¸¿©ÁÙ TextMeshProUGUI")]
+        [Tooltip("ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ TextMeshProUGUI")]
         public TMP_Text summaryText;
 
-        [Tooltip("´Ù½Ã Ã¤±¼ÇÏ±â ¹öÆ°")]
+        [Tooltip("ï¿½Ù½ï¿½ Ã¤ï¿½ï¿½ï¿½Ï±ï¿½ ï¿½ï¿½Æ°")]
         public Button mineAgainButton;
 
-        [Tooltip("¾÷±×·¹ÀÌµå È­¸éÀ¸·Î °¡´Â ¹öÆ° (Áö±ÝÀº µ¿ÀÛ¸¸ ¼û±è)")]
+        [Tooltip("ï¿½ï¿½ï¿½×·ï¿½ï¿½Ìµï¿½ È­ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Æ° (ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Û¸ï¿½ ï¿½ï¿½ï¿½ï¿½)")]
         public Button upgradeButton;
 
         CanvasGroup _canvasGroup;
@@ -27,23 +28,28 @@ namespace Pulseforge.UI
 
         void Awake()
         {
-            // Panel ÀÌ ºñ¾î ÀÖÀ¸¸é ÀÚ±â ÀÚ½ÅÀ» ÆÐ³Î·Î »ç¿ë
+            // Panel ï¿½ï¿½ ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ú±ï¿½ ï¿½Ú½ï¿½ï¿½ï¿½ ï¿½Ð³Î·ï¿½ ï¿½ï¿½ï¿½
             if (panel == null)
                 panel = gameObject;
 
-            // ·çÆ®¿¡ CanvasGroup ÀÌ ´Þ·Á ÀÖÀ¸¸é °¡Á®¿È (¾ø¾îµµ »ó°ü ¾øÀ½)
+            // ï¿½ï¿½Æ®ï¿½ï¿½ CanvasGroup ï¿½ï¿½ ï¿½Þ·ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ (ï¿½ï¿½ï¿½îµµ ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½)
             _canvasGroup = GetComponent<CanvasGroup>();
 
-            // ½ÃÀÛ ½Ã¿¡´Â Ç×»ó ¼û±ä »óÅÂ¿¡¼­ Ãâ¹ß
+            // ï¿½ï¿½ï¿½ï¿½ ï¿½Ã¿ï¿½ï¿½ï¿½ ï¿½×»ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Â¿ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½
             HideImmediate();
+            if (mineAgainButton != null)
+            mineAgainButton.onClick.AddListener(OnClickMineAgain);
+
+            if (upgradeButton != null)
+            upgradeButton.onClick.AddListener(OnClickUpgrade);
         }
 
         /// <summary>
-        /// ÆË¾÷À» Áï½Ã ¼û±è (¾Ö´Ï¸ÞÀÌ¼Ç ¾øÀÌ)
+        /// ï¿½Ë¾ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ (ï¿½Ö´Ï¸ï¿½ï¿½Ì¼ï¿½ ï¿½ï¿½ï¿½ï¿½)
         /// </summary>
         public void HideImmediate()
         {
-            // °¡Àå È®½ÇÇÏ°Ô: ÆË¾÷ ·çÆ® ¿ÀºêÁ§Æ® ÀÚÃ¼¸¦ ²¨ ¹ö¸²
+            // ï¿½ï¿½ï¿½ï¿½ È®ï¿½ï¿½ï¿½Ï°ï¿½: ï¿½Ë¾ï¿½ ï¿½ï¿½Æ® ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ® ï¿½ï¿½Ã¼ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
             gameObject.SetActive(false);
 
             if (_canvasGroup != null)
@@ -55,13 +61,13 @@ namespace Pulseforge.UI
         }
 
         /// <summary>
-        /// ¼¼¼Ç Á¾·á ½Ã ÄÁÆ®·Ñ·¯¿¡¼­ È£ÃâÇÏ´Â ÁøÀÔÁ¡
+        /// ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½Æ®ï¿½Ñ·ï¿½ï¿½ï¿½ï¿½ï¿½ È£ï¿½ï¿½ï¿½Ï´ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         /// </summary>
         public void Show(IReadOnlyDictionary<RewardType, int> rewards, SessionController session)
         {
             _controller = session;
 
-            // ÆË¾÷ ·çÆ® ÄÑ±â
+            // ï¿½Ë¾ï¿½ ï¿½ï¿½Æ® ï¿½Ñ±ï¿½
             gameObject.SetActive(true);
 
             if (_canvasGroup != null)
@@ -71,17 +77,17 @@ namespace Pulseforge.UI
                 _canvasGroup.interactable = true;
             }
 
-            // ===== ÅØ½ºÆ® Ã¤¿ì±â =====
+            // ===== ï¿½Ø½ï¿½Æ® Ã¤ï¿½ï¿½ï¿½ =====
             if (summaryText != null)
             {
                 if (rewards == null || rewards.Count == 0)
                 {
-                    summaryText.text = "¾ÆÁ÷ Ã¤±¼ÇÑ ÀÚ¿øÀÌ ¾ø½À´Ï´Ù.";
+                    summaryText.text = "ï¿½ï¿½ï¿½ï¿½ Ã¤ï¿½ï¿½ï¿½ï¿½ ï¿½Ú¿ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ï´ï¿½.";
                 }
                 else
                 {
                     var sb = new StringBuilder();
-                    sb.AppendLine("ÀÌ¹ø ¼¼¼Ç °á°ú");
+                    sb.AppendLine("ï¿½Ì¹ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½");
 
                     foreach (var kv in rewards)
                     {
@@ -92,7 +98,7 @@ namespace Pulseforge.UI
                 }
             }
 
-            // ===== ¹öÆ° ¸®½º³Ê ¼³Á¤ =====
+            // ===== ï¿½ï¿½Æ° ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ =====
             if (mineAgainButton != null)
             {
                 mineAgainButton.onClick.RemoveAllListeners();
@@ -107,27 +113,28 @@ namespace Pulseforge.UI
         }
 
         /// <summary>
-        /// "´Ù½Ã Ã¤±¼ÇÏ±â" ¹öÆ° Å¬¸¯
+        /// "ï¿½Ù½ï¿½ Ã¤ï¿½ï¿½ï¿½Ï±ï¿½" ï¿½ï¿½Æ° Å¬ï¿½ï¿½
         /// </summary>
         private void OnClickMineAgain()
         {
             if (_controller == null)
                 return;
 
-            // ÆË¾÷ ¸ÕÀú ¼û±â°í
+            // ï¿½Ë¾ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½
             HideImmediate();
 
-            // ¼¼¼Ç ´Ù½Ã ½ÃÀÛ
+            // ï¿½ï¿½ï¿½ï¿½ ï¿½Ù½ï¿½ ï¿½ï¿½ï¿½ï¿½
             _controller.StartSession();
         }
 
         /// <summary>
-        /// "¾÷±×·¹ÀÌµå" ¹öÆ° Å¬¸¯ (Áö±ÝÀº ÆË¾÷¸¸ ´Ý°í, ³ªÁß¿¡ È­¸é ÀÌµ¿ ¿¬°á)
+        /// "ï¿½ï¿½ï¿½×·ï¿½ï¿½Ìµï¿½" ï¿½ï¿½Æ° Å¬ï¿½ï¿½ (ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ë¾ï¿½ï¿½ï¿½ ï¿½Ý°ï¿½, ï¿½ï¿½ï¿½ß¿ï¿½ È­ï¿½ï¿½ ï¿½Ìµï¿½ ï¿½ï¿½ï¿½ï¿½)
         /// </summary>
         void OnClickUpgrade()
         {
-            // TODO: ¾÷±×·¹ÀÌµå È­¸é ¿­±â ¿¬°á ¿¹Á¤
+            // TODO: ï¿½ï¿½ï¿½×·ï¿½ï¿½Ìµï¿½ È­ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
             HideImmediate();
+            SceneManager.LoadScene("PF_Outpost");
         }
     }
 }
