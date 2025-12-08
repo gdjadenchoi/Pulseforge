@@ -24,4 +24,7 @@ MonoBehaviour:
   effectKey: 
   valueType: 0
   valuePerLevel: 1
-  prerequisites: []
+  requiredPlayerLevel: 0
+  prerequisites:
+  - requiredUpgradeId: OreAmount
+    requiredLevel: 1

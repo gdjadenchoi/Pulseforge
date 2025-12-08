@@ -6,9 +6,9 @@ namespace Pulseforge.Systems
 {
     /// <summary>
     /// 업그레이드 전체를 관리하는 매니저.
-    /// - 현재는 "레벨만" 관리하고, 비용/조건은 이후 단계에서 붙일 예정.
+    /// - string upgradeId 기반으로 레벨을 관리한다. (예: "OreAmount", "CursorDamage")
+    /// - UpgradeDefinition(SO)를 등록해두면 최대 레벨 / 비용 곡선 / 프리리퀴짓 등의 메타데이터를 함께 사용한다.
     /// - DontDestroyOnLoad 싱글톤.
-    /// - 키는 string upgradeId 로 관리한다. (예: "OreAmount", "CursorDamage")
     /// </summary>
     [DefaultExecutionOrder(-200)] // ★ 항상 가장 먼저 초기화되도록 실행 순서 앞으로 당김
     public class UpgradeManager : MonoBehaviour
@@ -25,7 +25,7 @@ namespace Pulseforge.Systems
         //==============================================================
 
         [Header("정의(선택 사항) - ScriptableObject")]
-        [Tooltip("UpgradeDefinition SO 들을 등록해두면, 이름/설명/최대 레벨/비용 곡선 등의 메타데이터로 사용한다.")]
+        [Tooltip("UpgradeDefinition SO 들을 등록해두면, 이름/설명/최대 레벨/비용 곡선/프리리퀴짓 등의 메타데이터로 사용한다.")]
         [SerializeField] private UpgradeDefinition[] _definitions;
 
         [Serializable]
@@ -260,14 +260,36 @@ namespace Pulseforge.Systems
         }
 
         //==============================================================
-        //  업그레이드 처리 (현재는 비용 없이 단순 레벨 +1)
+        //  프리리퀴짓 체크
+        //==============================================================
+
+        /// <summary>
+        /// 이 업그레이드가 해금 조건(플레이어 레벨, 선행 업그레이드)을 만족하는지 여부.
+        /// 해금 조건이 없다면 항상 true 를 반환한다.
+        /// </summary>
+        public bool MeetsPrerequisites(string upgradeId)
+        {
+            var def = GetDefinitionInternal(upgradeId);
+            if (def == null)
+                return true;
+
+            int playerLevel = 0;
+            var levelManager = LevelManager.Instance;
+            if (levelManager != null)
+                playerLevel = levelManager.Level;
+
+            // UpgradeDefinition 내부의 CheckPrerequisites 로 위임
+            return def.CheckPrerequisites(playerLevel, GetLevel);
+        }
+
+        //==============================================================
+        //  업그레이드 처리
         //==============================================================
 
         /// <summary>
         /// 업그레이드를 시도한다.
-        /// - 아직 최대 레벨이 아니면 레벨을 1 올리고 true 반환.
-        /// - 이미 최대 레벨이면 false 반환.
-        /// - 이후 비용/조건 로직은 추후 단계에서 추가 예정.
+        /// - 아직 최대 레벨이 아니고, 해금 조건을 모두 만족하면 레벨을 1 올리고 true 반환.
+        /// - 이미 최대 레벨이거나 조건을 만족하지 못하면 false 반환.
         /// </summary>
         public bool TryUpgrade(string upgradeId)
         {
@@ -280,6 +302,14 @@ namespace Pulseforge.Systems
             {
                 if (_logUpgrade)
                     Debug.Log($"[UpgradeManager] '{upgradeId}' 이미 최대 레벨({maxLevel})입니다.");
+                return false;
+            }
+
+            // 선행 조건(플레이어 레벨, 다른 업그레이드 레벨) 검사
+            if (!MeetsPrerequisites(upgradeId))
+            {
+                if (_logUpgrade)
+                    Debug.Log($"[UpgradeManager] '{upgradeId}' 업그레이드 실패: 선행 조건을 만족하지 않습니다.");
                 return false;
             }
 

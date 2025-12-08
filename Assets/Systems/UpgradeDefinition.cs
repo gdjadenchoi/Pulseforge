@@ -4,173 +4,198 @@ using UnityEngine;
 namespace Pulseforge.Systems
 {
     /// <summary>
-    /// 업그레이드 1개에 대한 데이터 정의 ScriptableObject
-    /// - UpgradeManager / UpgradeEntry 에서 참조해서 사용
+    /// 단일 업그레이드 정의 ScriptableObject.
+    /// 비용 곡선, 효과 타입, 선행 조건(업그레이드 / 플레이어 레벨)을 모두 포함한다.
     /// </summary>
     [CreateAssetMenu(
-        fileName = "UpgradeDefinition_",
+        fileName = "UpgradeDefinition",
         menuName = "Pulseforge/Upgrade Definition",
         order = 0)]
     public class UpgradeDefinition : ScriptableObject
     {
-        //==============================================================
-        //  기본 정보
-        //==============================================================
-
-        [Header("기본 정보")]
-        [Tooltip("이 업그레이드를 식별하기 위한 고유 ID (예: \"OreAmount\", \"CursorDamage\")")]
+        // ==========================
+        //  식별 / 표시용
+        // ==========================
+        [Header("Identity")]
+        [Tooltip("업그레이드 고유 ID. 비워두면 Asset 이름을 그대로 사용한다.")]
         [SerializeField] private string id;
 
-        [Tooltip("UI에 표시될 이름 (비어있으면 id를 사용)")]
+        [Tooltip("UI에 표시될 이름")]
         [SerializeField] private string displayName;
 
-        [Tooltip("UI 등에 표시될 설명 텍스트")]
         [TextArea]
+        [Tooltip("업그레이드 설명 텍스트")]
         [SerializeField] private string description;
 
-        [Tooltip("업그레이드 아이콘 (선택 사항)")]
+        [Tooltip("업그레이드 아이콘")]
         [SerializeField] private Sprite icon;
 
-        //==============================================================
-        //  레벨 설정
-        //==============================================================
-
-        [Header("레벨 설정")]
-        [Tooltip("이 업그레이드의 최대 레벨")]
-        [Min(1)]
-        [SerializeField] private int maxLevel = 10;
-
-        //==============================================================
-        //  비용 곡선
-        //==============================================================
-
-        public enum UpgradeCostCurveType
-        {
-            /// <summary>선형: baseCost + costStep * (레벨-1)</summary>
-            Linear = 0,
-
-            /// <summary>지수: baseCost * costFactor^(레벨-1)</summary>
-            Exponential = 1,
-
-            /// <summary>커스텀 (나중에 확장용)</summary>
-            Custom = 2,
-        }
-
-        [Header("비용 설정")]
-        [Tooltip("비용 계산 방식")]
-        [SerializeField] private UpgradeCostCurveType costCurveType = UpgradeCostCurveType.Linear;
-
-        [Tooltip("1레벨 업그레이드 비용의 기본값")]
-        [Min(0)]
-        [SerializeField] private int baseCost = 10;
-
-        [Tooltip("선형 증가 시, 레벨당 추가되는 고정 비용 (Linear 전용)")]
-        [Min(0)]
-        [SerializeField] private int costStep = 5;
-
-        [Tooltip("지수 곡선 사용 시, 레벨당 곱해지는 계수 (Exponential 전용)")]
-        [Min(0f)]
-        [SerializeField] private float costFactor = 1.5f;
-
-        //==============================================================
-        //  효과 설정
-        //==============================================================
-
-        public enum UpgradeEffectValueType
-        {
-            Flat = 0,    // 고정 값 증가
-            Percent = 1, // 퍼센트 증가
-        }
-
-        [Header("효과 설정")]
-        [Tooltip("실제 적용 로직에서 사용할 효과 키 (비어있으면 id와 동일하게 사용)")]
-        [SerializeField] private string effectKey;
-
-        [Tooltip("효과 값 타입 (고정 or 퍼센트)")]
-        [SerializeField] private UpgradeEffectValueType valueType = UpgradeEffectValueType.Flat;
-
-        [Tooltip("레벨당 증가량 (Flat이면 +1, Percent면 +0.1 = 10% 같은 식으로 사용)")]
-        [SerializeField] private float valuePerLevel = 1f;
-
-        //==============================================================
-        //  해금 조건 (트리 구조용)
-        //==============================================================
-
-        [Serializable]
-        public struct UpgradePrerequisite
-        {
-            [Tooltip("필요한 업그레이드 ID (예: \"OreAmount\")")]
-            public string requiredUpgradeId;
-
-            [Tooltip("위 업그레이드가 최소 몇 레벨 이상이어야 하는지")]
-            public int requiredLevel;
-        }
-
-        [Header("해금 조건 (트리)")]
-        [Tooltip("이 업그레이드를 찍기 위해 먼저 찍어야 하는 업그레이드들")]
-        [SerializeField] private UpgradePrerequisite[] prerequisites = Array.Empty<UpgradePrerequisite>();
-
-        //==============================================================
-        //  프로퍼티
-        //==============================================================
-
+        /// <summary>업그레이드 고유 ID. 비워져 있으면 Asset 이름을 사용.</summary>
         public string Id => string.IsNullOrWhiteSpace(id) ? name : id;
+
+        /// <summary>UI 표시용 이름. 비어 있으면 Id 사용.</summary>
         public string DisplayName => string.IsNullOrWhiteSpace(displayName) ? Id : displayName;
         public string Description => description;
         public Sprite Icon => icon;
+
+        // ==========================
+        //  레벨 / 비용
+        // ==========================
+        public enum UpgradeCostCurveType
+        {
+            Linear,
+            Exponential
+        }
+
+        [Header("Level & Cost")]
+        [Tooltip("최대 레벨 (0 이하는 1로 취급)")]
+        [SerializeField] private int maxLevel = 5;
+
+        [Tooltip("비용 곡선 타입")]
+        [SerializeField] private UpgradeCostCurveType costCurveType = UpgradeCostCurveType.Linear;
+
+        [Tooltip("1레벨 기준 기본 비용")]
+        [Min(0)]
+        [SerializeField] private int baseCost = 10;
+
+        [Tooltip("Linear 곡선에서 레벨당 추가 비용 (2레벨부터 적용)")]
+        [Min(0)]
+        [SerializeField] private int costStep = 5;
+
+        [Tooltip("Exponential 곡선에서 레벨당 곱해지는 계수")]
+        [Min(1f)]
+        [SerializeField] private float costFactor = 1.5f;
+
+        /// <summary>최대 레벨 (최소 1 보장)</summary>
         public int MaxLevel => Mathf.Max(1, maxLevel);
 
-        public UpgradeCostCurveType CostType => costCurveType;
-        public int BaseCost => Mathf.Max(0, baseCost);
-        public int CostStep => Mathf.Max(0, costStep);
-        public float CostFactor => Mathf.Max(0f, costFactor);
-
-        public string EffectKey => string.IsNullOrWhiteSpace(effectKey) ? Id : effectKey;
-        public UpgradeEffectValueType ValueType => valueType;
-        public float ValuePerLevel => valuePerLevel;
-
-        public UpgradePrerequisite[] Prerequisites => prerequisites;
-
-        //==============================================================
-        //  비용 계산
-        //==============================================================
-
+        /// <summary>
+        /// 주어진 "다음 레벨(nextLevel)"에 필요한 비용을 반환.
+        /// nextLevel = 1 이면 1레벨로 올리는 비용.
+        /// </summary>
         public int GetCostForLevel(int nextLevel)
         {
-            if (nextLevel <= 0)
-                nextLevel = 1;
+            if (nextLevel <= 1)
+                return Mathf.Max(0, baseCost);
 
             switch (costCurveType)
             {
                 case UpgradeCostCurveType.Linear:
-                    return Mathf.Max(0, BaseCost + CostStep * (nextLevel - 1));
-
+                {
+                    // baseCost + costStep * (level - 1)
+                    var cost = baseCost + costStep * (nextLevel - 1);
+                    return Mathf.Max(0, cost);
+                }
                 case UpgradeCostCurveType.Exponential:
-                    if (CostFactor <= 0f)
-                        return BaseCost;
-                    float raw = BaseCost * Mathf.Pow(CostFactor, nextLevel - 1);
-                    return Mathf.Max(0, Mathf.RoundToInt(raw));
-
-                case UpgradeCostCurveType.Custom:
+                {
+                    // baseCost * costFactor^(level-1)
+                    float f = baseCost * Mathf.Pow(costFactor, nextLevel - 1);
+                    int cost = Mathf.RoundToInt(f);
+                    return Mathf.Max(0, cost);
+                }
                 default:
-                    return Mathf.Max(0, BaseCost + CostStep * (nextLevel - 1));
+                    return Mathf.Max(0, baseCost);
             }
         }
 
-#if UNITY_EDITOR
-        private void OnValidate()
+        // ==========================
+        //  효과 값
+        // ==========================
+        public enum UpgradeValueType
         {
-            if (string.IsNullOrWhiteSpace(id))
-                id = name;
-
-            if (maxLevel < 1) maxLevel = 1;
-            if (baseCost < 0) baseCost = 0;
-            if (costStep < 0) costStep = 0;
-            if (costFactor < 0f) costFactor = 0f;
-
-            if (prerequisites == null)
-                prerequisites = Array.Empty<UpgradePrerequisite>();
+            Flat,
+            Percent
         }
-#endif
+
+        [Header("Effect")]
+        [Tooltip("이 업그레이드가 어떤 효과 키에 매핑되는지. 비우면 Id 사용.")]
+        [SerializeField] private string effectKey;
+
+        [Tooltip("값 타입 (고정 수치 / 퍼센트 배율)")]
+        [SerializeField] private UpgradeValueType valueType = UpgradeValueType.Flat;
+
+        [Tooltip("레벨당 증가량 (Flat: +X, Percent: +X%)")]
+        [SerializeField] private float valuePerLevel = 1f;
+
+        /// <summary>효과 키. 비워두면 Id와 동일.</summary>
+        public string EffectKey => string.IsNullOrWhiteSpace(effectKey) ? Id : effectKey;
+        public UpgradeValueType ValueType => valueType;
+        public float ValuePerLevel => valuePerLevel;
+
+        /// <summary>
+        /// 주어진 레벨에서의 총 효과 값.
+        /// Flat = level * valuePerLevel
+        /// Percent = level * valuePerLevel (% 단위, 10이라면 +10%)
+        /// </summary>
+        public float GetTotalValueForLevel(int level)
+        {
+            if (level <= 0) return 0f;
+            return level * valuePerLevel;
+        }
+
+        // ==========================
+        //  선행 조건 (업그레이드 / 플레이어 레벨)
+        // ==========================
+
+        [Serializable]
+        public struct UpgradePrerequisite
+        {
+            [Tooltip("필요한 선행 업그레이드 ID")]
+            public string requiredUpgradeId;
+
+            [Tooltip("해당 업그레이드의 최소 레벨")]
+            public int requiredLevel;
+        }
+
+        [Header("Unlock Requirements")]
+        [Tooltip("이 업그레이드를 열기 위한 최소 플레이어 레벨 (0 이하면 레벨 제한 없음).")]
+        [SerializeField] private int requiredPlayerLevel = 0;
+
+        [Tooltip("선행 업그레이드 조건 목록. 모두 만족해야 잠금 해제.")]
+        [SerializeField] private UpgradePrerequisite[] prerequisites = Array.Empty<UpgradePrerequisite>();
+
+        /// <summary>플레이어 최소 레벨 (0 이하면 제한 없음).</summary>
+        public int RequiredPlayerLevel => Mathf.Max(0, requiredPlayerLevel);
+
+        public UpgradePrerequisite[] Prerequisites => prerequisites;
+
+        /// <summary>
+        /// 전달받은 플레이어 레벨 / 업그레이드 레벨 조회 함수를 이용해
+        /// 이 업그레이드의 모든 해금 조건을 만족하는지 검사한다.
+        /// </summary>
+        /// <param name="currentPlayerLevel">현재 플레이어 레벨</param>
+        /// <param name="getUpgradeLevel">
+        /// string upgradeId → 해당 업그레이드 현재 레벨을 반환하는 함수.
+        /// null 이면 업그레이드 조건은 검사하지 않는다.
+        /// </param>
+        public bool CheckPrerequisites(int currentPlayerLevel, Func<string, int> getUpgradeLevel)
+        {
+            // 1) 플레이어 레벨 조건
+            if (RequiredPlayerLevel > 0 && currentPlayerLevel < RequiredPlayerLevel)
+                return false;
+
+            // 2) 업그레이드 레벨 조건
+            if (prerequisites == null || prerequisites.Length == 0)
+                return true;
+
+            if (getUpgradeLevel == null)
+            {
+                // 방어적 코드: 함수가 없으면 조건을 통과시키거나,
+                // 필요하다면 false 로 바꿀 수 있음. 여기서는 "통과" 쪽으로.
+                return true;
+            }
+
+            foreach (var pre in prerequisites)
+            {
+                if (string.IsNullOrWhiteSpace(pre.requiredUpgradeId))
+                    continue;
+
+                int currentLevel = getUpgradeLevel(pre.requiredUpgradeId);
+                if (currentLevel < pre.requiredLevel)
+                    return false;
+            }
+
+            return true;
+        }
     }
 }

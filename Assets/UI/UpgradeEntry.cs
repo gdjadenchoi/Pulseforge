@@ -1,30 +1,26 @@
 using System;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-using TMPro;
 
 namespace Pulseforge.Systems
 {
     /// <summary>
-    /// 업그레이드 한 줄(버튼 + 텍스트) UI
-    /// - UpgradeDefinition + UpgradeManager + RewardManager 를 묶어서
-    ///   "코스트 표시 + 구매 처리"까지 담당.
-    /// - AutoUpgradePanel 에서 Setup(...)으로 세팅해 쓰는 용도.
+    /// 업그레이드 한 줄 UI.
+    /// - UpgradeDefinition 데이터를 기반으로 제목/설명/아이콘/레벨/코스트를 표시
+    /// - 버튼 클릭 시 업그레이드 시도
+    /// - 자원/레벨/플레이어 레벨/선행 업그레이드 변화에 따라 자동으로 잠금/해금 상태를 갱신
     /// </summary>
     public class UpgradeEntry : MonoBehaviour
     {
-        //==============================================================
-        //  인스펙터 설정
-        //==============================================================
-
-        [Header("기본 참조")]
-        [Tooltip("이 엔트리가 표시할 업그레이드 정의(SO).\nAutoUpgradePanel에서 Setup()으로 들어올 수도 있음.")]
+        [Header("Definition")]
+        [Tooltip("표시할 업그레이드 정의 (선택). 비워두면 UpgradeIdOverride 로만 동작할 수 있다.")]
         [SerializeField] private UpgradeDefinition _definition;
 
-        [Tooltip("정의를 사용하지 않고, ID만 직접 넣어 쓸 경우 (옵션).\n비워두면 definition.Id 사용.")]
+        [Tooltip("강제로 사용할 업그레이드 ID. 비워두면 Definition.Id 를 사용.")]
         [SerializeField] private string _upgradeIdOverride;
 
-        [Header("UI 참조")]
+        [Header("UI References")]
         [SerializeField] private TextMeshProUGUI _titleText;
         [SerializeField] private TextMeshProUGUI _levelText;
         [SerializeField] private TextMeshProUGUI _descText;
@@ -32,29 +28,31 @@ namespace Pulseforge.Systems
         [SerializeField] private Button _button;
         [SerializeField] private Image _iconImage;
 
-        [Header("비용 설정")]
+        [Header("Cost Settings")]
         [Tooltip("이 업그레이드에 사용할 화폐 타입")]
         [SerializeField] private RewardType _costCurrency = RewardType.Crystal;
 
-        [Header("색상 설정 (옵션)")]
+        [Header("Colors")]
         [SerializeField] private Color _normalColor = Color.white;
-        [SerializeField] private Color _notEnoughColor = Color.gray;
+        [SerializeField] private Color _notEnoughColor = Color.red;
         [SerializeField] private Color _maxLevelColor = Color.yellow;
+        [Tooltip("잠금 상태일 때 코스트 텍스트 색상. 지정하지 않으면 NotEnoughColor 를 사용.")]
+        [SerializeField] private Color _lockedColor = Color.gray;
 
-        //==============================================================
-        //  내부 상태
-        //==============================================================
+        [Header("Texts")]
+        [Tooltip("잠금 상태일 때 코스트 텍스트에 표시될 문자열")]
+        [SerializeField] private string _lockedText = "LOCKED";
 
+        // ─────────────────────────────────────────────────────────────
+        //  런타임 참조
+        // ─────────────────────────────────────────────────────────────
         private UpgradeManager _upgradeManager;
         private RewardManager _rewardManager;
-
-        //==============================================================
-        //  편의 프로퍼티
-        //==============================================================
+        private LevelManager _levelManager;
 
         /// <summary>
-        /// 실제로 사용할 업그레이드 ID
-        /// - override가 비어있으면 Definition.Id 사용
+        /// 이 엔트리가 참조하는 실제 업그레이드 ID.
+        /// Override 가 있으면 그걸 사용하고, 없으면 Definition.Id 를 사용.
         /// </summary>
         private string EffectiveId
         {
@@ -63,60 +61,35 @@ namespace Pulseforge.Systems
                 if (!string.IsNullOrWhiteSpace(_upgradeIdOverride))
                     return _upgradeIdOverride.Trim();
 
-                return _definition != null ? _definition.Id : null;
+                if (_definition != null)
+                    return _definition.Id;
+
+                return null;
             }
         }
 
-        //==============================================================
-        //  외부에서 사용하는 Setup (AutoUpgradePanel용)
-        //==============================================================
-
-        /// <summary>
-        /// AutoUpgradePanel에서 행 생성 후 호출하는 초기화 함수.
-        /// </summary>
-        public void Setup(UpgradeDefinition definition, UpgradeManager manager = null)
-        {
-            _definition = definition;
-            if (_definition != null)
-            {
-                // override가 비어 있으면 정의의 ID를 기본으로 사용
-                if (string.IsNullOrWhiteSpace(_upgradeIdOverride))
-                    _upgradeIdOverride = _definition.Id;
-            }
-
-            _upgradeManager = manager != null ? manager : UpgradeManager.Instance;
-            _rewardManager = RewardManager.SafeInstance;
-
-            RefreshUI();
-        }
-
-        //==============================================================
-        //  Unity 라이프사이클
-        //==============================================================
-
-        private void Awake()
-        {
-            // 혹시 Setup()이 아직 안 불렸을 수 있으니, 안전하게 매니저를 찾아둠
-            if (_upgradeManager == null)
-                _upgradeManager = UpgradeManager.Instance;
-
-            if (_rewardManager == null)
-                _rewardManager = RewardManager.SafeInstance;
-        }
+        // ─────────────────────────────────────────────────────────────
+        //  Unity
+        // ─────────────────────────────────────────────────────────────
 
         private void OnEnable()
         {
             if (_button != null)
-            {
                 _button.onClick.AddListener(OnClickUpgrade);
-            }
 
-            // 업그레이드 레벨 변경 / 자원 변경 시 UI 갱신
+            if (_upgradeManager == null)
+                _upgradeManager = UpgradeManager.Instance;
+            if (_rewardManager == null)
+                _rewardManager = RewardManager.SafeInstance;
+            if (_levelManager == null)
+                _levelManager = LevelManager.Instance;
+
             if (_upgradeManager != null)
                 _upgradeManager.OnLevelChanged += HandleUpgradeLevelChanged;
-
             if (_rewardManager != null)
                 _rewardManager.OnResourceChanged += HandleResourceChanged;
+            if (_levelManager != null)
+                _levelManager.OnLevelChanged += HandlePlayerLevelChanged;
 
             RefreshUI();
         }
@@ -124,217 +97,249 @@ namespace Pulseforge.Systems
         private void OnDisable()
         {
             if (_button != null)
-            {
                 _button.onClick.RemoveListener(OnClickUpgrade);
-            }
 
             if (_upgradeManager != null)
                 _upgradeManager.OnLevelChanged -= HandleUpgradeLevelChanged;
-
             if (_rewardManager != null)
                 _rewardManager.OnResourceChanged -= HandleResourceChanged;
+            if (_levelManager != null)
+                _levelManager.OnLevelChanged -= HandlePlayerLevelChanged;
         }
 
-        //==============================================================
-        //  이벤트 핸들러
-        //==============================================================
+        // ─────────────────────────────────────────────────────────────
+        //  외부에서 호출하는 초기화
+        // ─────────────────────────────────────────────────────────────
 
-        private void HandleUpgradeLevelChanged(string id, int newLevel)
+        /// <summary>
+        /// UpgradePanel 이 동적으로 행을 생성할 때 호출되는 설정 함수.
+        /// </summary>
+        public void Setup(UpgradeDefinition definition, UpgradeManager manager = null)
         {
-            // 이 엔트리가 담당하는 업그레이드만 갱신
-            if (id == EffectiveId)
-            {
-                RefreshUI();
-            }
-        }
+            _definition = definition;
 
-        private void HandleResourceChanged(RewardType type, int current)
-        {
-            // 비용에 사용하는 화폐가 바뀐 것만 반영
-            if (type == _costCurrency)
-            {
-                RefreshUI();
-            }
-        }
+            if (_definition != null && string.IsNullOrWhiteSpace(_upgradeIdOverride))
+                _upgradeIdOverride = _definition.Id;
 
-        //==============================================================
-        //  메인 로직: 버튼 클릭 → 비용 체크 → 자원 소모 → 업그레이드
-        //==============================================================
-
-        private void OnClickUpgrade()
-        {
-            if (_upgradeManager == null)
-            {
-                Debug.LogWarning("[UpgradeEntry] UpgradeManager가 없음");
-                return;
-            }
-
-            string id = EffectiveId;
-            if (string.IsNullOrWhiteSpace(id))
-            {
-                Debug.LogWarning("[UpgradeEntry] 유효한 Upgrade Id가 없음");
-                return;
-            }
-
-            // 이미 최대 레벨인지 확인
-            if (_upgradeManager.IsMaxLevel(id))
-            {
-                Debug.Log($"[UpgradeEntry] '{id}' 이미 최대 레벨.");
-                RefreshUI();
-                return;
-            }
-
-            // 비용 계산
-            var def = GetDefinitionFor(id);
-            int currentLevel = _upgradeManager.GetLevel(id);
-            int nextLevel = currentLevel + 1;
-            int cost = GetCost(def, nextLevel);
-
-            // 자원 확인
-            int currentCurrency = _rewardManager != null ? _rewardManager.Get(_costCurrency) : 0;
-            if (currentCurrency < cost)
-            {
-                Debug.Log($"[UpgradeEntry] '{id}' 업그레이드 실패 - 자원 부족 ({currentCurrency}/{cost})");
-                RefreshUI();
-                return;
-            }
-
-            // 자원 소모 (RewardManager.Add는 음수 지원 안하니까 Set 사용)
-            if (_rewardManager != null && cost > 0)
-            {
-                int after = Mathf.Max(0, currentCurrency - cost);
-                _rewardManager.Set(_costCurrency, after);
-            }
-
-            // 업그레이드 진행
-            bool success = _upgradeManager.TryUpgrade(id);
-            if (!success)
-            {
-                Debug.Log($"[UpgradeEntry] '{id}' TryUpgrade 실패 (아마 이미 최대 레벨일 가능성)");
-            }
+            _upgradeManager = manager ?? UpgradeManager.Instance;
+            _rewardManager = RewardManager.SafeInstance;
+            _levelManager = LevelManager.Instance;
 
             RefreshUI();
         }
 
-        //==============================================================
+        // ─────────────────────────────────────────────────────────────
+        //  이벤트 핸들러
+        // ─────────────────────────────────────────────────────────────
+
+        private void HandleUpgradeLevelChanged(string changedId, int _)
+        {
+            var id = EffectiveId;
+            if (string.IsNullOrWhiteSpace(id))
+                return;
+
+            // 1) 자기 자신 업그레이드 레벨 변경
+            if (string.Equals(changedId, id, StringComparison.Ordinal))
+            {
+                RefreshUI();
+                return;
+            }
+
+            // 2) 프리리퀴짓으로 참조하는 업그레이드 레벨 변경
+            //    (예: OreAmount 가 오르면, 그것을 요구하는 CursorDamage 가 잠금 해제될 수 있음)
+            if (_definition != null && _definition.Prerequisites != null)
+            {
+                foreach (var pre in _definition.Prerequisites)
+                {
+                    if (string.IsNullOrWhiteSpace(pre.requiredUpgradeId))
+                        continue;
+
+                    if (string.Equals(pre.requiredUpgradeId, changedId, StringComparison.Ordinal))
+                    {
+                        RefreshUI();
+                        return;
+                    }
+                }
+            }
+        }
+
+        private void HandleResourceChanged(RewardType type, int _)
+        {
+            // 다른 화폐 타입 변화는 무시
+            if (type != _costCurrency)
+                return;
+
+            RefreshUI();
+        }
+
+        private void HandlePlayerLevelChanged(int _)
+        {
+            // 플레이어 레벨이 변하면 잠금/해금 상태가 바뀔 수 있으므로 항상 갱신
+            RefreshUI();
+        }
+
+        // ─────────────────────────────────────────────────────────────
         //  UI 갱신
-        //==============================================================
+        // ─────────────────────────────────────────────────────────────
 
         private void RefreshUI()
         {
-            if (!isActiveAndEnabled)
-                return;
+            var id = EffectiveId;
 
-            string id = EffectiveId;
-
-            // 매니저나 ID가 없으면 비활성화
-            if (_upgradeManager == null || string.IsNullOrWhiteSpace(id))
+            // 필수 참조가 없는 경우
+            if (string.IsNullOrWhiteSpace(id) || _upgradeManager == null)
             {
-                if (_titleText != null) _titleText.text = "(Invalid)";
-                if (_levelText != null) _levelText.text = "-";
-                if (_costText != null) _costText.text = "-";
-                if (_button != null) _button.interactable = false;
-                return;
-            }
-
-            var def = GetDefinitionFor(id);
-            int level = _upgradeManager.GetLevel(id);
-            int maxLevel = _upgradeManager.GetMaxLevel(id);
-            bool isMax = level >= maxLevel && maxLevel > 0;
-
-            // 타이틀 / 설명 / 아이콘
-            if (_titleText != null)
-                _titleText.text = def != null ? def.DisplayName : id;
-
-            if (_descText != null)
-                _descText.text = def != null ? def.Description : string.Empty;
-
-            if (_iconImage != null)
-            {
-                if (def != null && def.Icon != null)
-                {
-                    _iconImage.enabled = true;
-                    _iconImage.sprite = def.Icon;
-                }
-                else
-                {
-                    _iconImage.enabled = false;
-                }
-            }
-
-            // 레벨 텍스트
-            if (_levelText != null)
-            {
-                if (isMax)
-                    _levelText.text = $"Lv.{level} / MAX";
-                else
-                    _levelText.text = $"Lv.{level} / {maxLevel}";
-            }
-
-            // 비용 / 버튼 상태
-            if (_costText != null || _button != null)
-            {
-                if (isMax)
-                {
-                    if (_costText != null)
-                    {
-                        _costText.text = "MAX";
-                        _costText.color = _maxLevelColor;
-                    }
-
-                    if (_button != null)
-                        _button.interactable = false;
-
-                    return;
-                }
-
-                int nextLevel = level + 1;
-                int cost = GetCost(def, nextLevel);
-                int currentCurrency = _rewardManager != null ? _rewardManager.Get(_costCurrency) : 0;
-                bool affordable = currentCurrency >= cost;
-
+                if (_titleText != null)
+                    _titleText.text = _definition != null ? _definition.DisplayName : "(Invalid)";
+                if (_levelText != null)
+                    _levelText.text = string.Empty;
                 if (_costText != null)
                 {
-                    _costText.text = cost > 0 ? $"Cost: {cost}" : "Free";
-                    _costText.color = affordable ? _normalColor : _notEnoughColor;
+                    _costText.text = "-";
+                    _costText.color = _notEnoughColor;
+                }
+                if (_button != null)
+                    _button.interactable = false;
+                return;
+            }
+
+            var def = _upgradeManager.GetDefinition(id) ?? _definition;
+            if (def == null)
+            {
+                if (_titleText != null)
+                    _titleText.text = id;
+                if (_levelText != null)
+                    _levelText.text = string.Empty;
+                if (_costText != null)
+                {
+                    _costText.text = "-";
+                    _costText.color = _notEnoughColor;
+                }
+                if (_button != null)
+                    _button.interactable = false;
+                return;
+            }
+
+            // 기본 텍스트/아이콘
+            if (_titleText != null)
+                _titleText.text = def.DisplayName;
+            if (_descText != null)
+                _descText.text = def.Description;
+            if (_iconImage != null)
+                _iconImage.sprite = def.Icon;
+
+            int currentLevel = _upgradeManager.GetLevel(id);
+            int maxLevel = _upgradeManager.GetMaxLevel(id);
+
+            if (_levelText != null)
+                _levelText.text = $"Lv {currentLevel}/{maxLevel}";
+
+            bool isMax = currentLevel >= maxLevel;
+
+            // ── 잠금 / 해금 / 최대 레벨 상태 판단 ────────────────
+            bool isUnlocked = _upgradeManager.MeetsPrerequisites(id);
+
+            // 1) 잠금 상태
+            if (!isUnlocked)
+            {
+                if (_costText != null)
+                {
+                    _costText.text = string.IsNullOrEmpty(_lockedText) ? "LOCKED" : _lockedText;
+                    // lockedColor 가 기본값(0,0,0,0)이면 notEnoughColor 재사용
+                    var colorToUse = (_lockedColor.a > 0.0001f) ? _lockedColor : _notEnoughColor;
+                    _costText.color = colorToUse;
                 }
 
                 if (_button != null)
-                    _button.interactable = affordable;
+                    _button.interactable = false;
+
+                return;
             }
+
+            // 2) 최대 레벨 상태
+            if (isMax)
+            {
+                if (_costText != null)
+                {
+                    _costText.text = "MAX";
+                    _costText.color = _maxLevelColor;
+                }
+
+                if (_button != null)
+                    _button.interactable = false;
+
+                return;
+            }
+
+            // 3) 일반 상태 (해금 & 아직 최대 레벨 아님)
+            int nextLevel = currentLevel + 1;
+            int cost = def.GetCostForLevel(nextLevel);
+
+            int currentCurrency = _rewardManager != null
+                ? _rewardManager.Get(_costCurrency)
+                : 0;
+
+            bool affordable = currentCurrency >= cost;
+
+            if (_costText != null)
+            {
+                _costText.text = cost.ToString("N0");
+                _costText.color = affordable ? _normalColor : _notEnoughColor;
+            }
+
+            if (_button != null)
+                _button.interactable = affordable;
         }
 
-        //==============================================================
-        //  헬퍼
-        //==============================================================
+        // ─────────────────────────────────────────────────────────────
+        //  버튼 클릭
+        // ─────────────────────────────────────────────────────────────
 
-        private UpgradeDefinition GetDefinitionFor(string id)
+        private void OnClickUpgrade()
         {
-            if (_definition != null && _definition.Id == id)
-                return _definition;
+            var id = EffectiveId;
+            if (string.IsNullOrWhiteSpace(id) || _upgradeManager == null || _rewardManager == null)
+                return;
 
-            // definition이 비어 있으면 UpgradeManager 쪽 정의를 참고 (있으면)
-            if (_upgradeManager != null)
+            // 1) 잠금 상태라면 아무 것도 하지 않음
+            if (!_upgradeManager.MeetsPrerequisites(id))
             {
-                return _upgradeManager.GetDefinition(id);
+                RefreshUI();
+                return;
             }
 
-            return null;
-        }
-
-        /// <summary>
-        /// 정의가 있으면 정의의 GetCostForLevel 사용, 없으면 간단한 기본 규칙 사용.
-        /// </summary>
-        private int GetCost(UpgradeDefinition def, int nextLevel)
-        {
-            if (def != null)
+            int currentLevel = _upgradeManager.GetLevel(id);
+            int maxLevel = _upgradeManager.GetMaxLevel(id);
+            if (currentLevel >= maxLevel)
             {
-                return def.GetCostForLevel(nextLevel);
+                RefreshUI();
+                return;
             }
 
-            // 정의가 없는 특별 케이스용: 아주 단순한 기본 값
-            // (나중에 필요 없으면 지워도 됨)
-            return Mathf.Max(1, 10 * nextLevel);
+            var def = _upgradeManager.GetDefinition(id) ?? _definition;
+            if (def == null)
+                return;
+
+            int nextLevel = currentLevel + 1;
+            int cost = def.GetCostForLevel(nextLevel);
+            int currentCurrency = _rewardManager.Get(_costCurrency);
+
+            if (currentCurrency < cost)
+            {
+                // 자원이 부족하면 단순히 UI만 갱신
+                RefreshUI();
+                return;
+            }
+
+            // 자원 차감
+            _rewardManager.Set(_costCurrency, currentCurrency - cost);
+
+            // 실제 업그레이드 시도 (프리리퀴짓 + 최대 레벨 체크는 내부에서 한 번 더 검사)
+            _upgradeManager.TryUpgrade(id);
+
+            // OnLevelChanged / OnResourceChanged 이벤트를 통해 자동으로 RefreshUI 가 호출되지만,
+            // 방어적 차원에서 한 번 더 갱신해준다.
+            RefreshUI();
         }
     }
 }

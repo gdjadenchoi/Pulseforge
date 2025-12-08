@@ -24,4 +24,7 @@ MonoBehaviour:
   effectKey: 
   valueType: 0
   valuePerLevel: 1
-  prerequisites: []
+  requiredPlayerLevel: 5
+  prerequisites:
+  - requiredUpgradeId: CursorRadius
+    requiredLevel: 1
