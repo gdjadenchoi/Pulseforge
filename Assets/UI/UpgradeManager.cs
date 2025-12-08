@@ -9,6 +9,7 @@ namespace Pulseforge.Systems
     /// - string upgradeId 기반으로 레벨을 관리한다. (예: "OreAmount", "CursorDamage")
     /// - UpgradeDefinition(SO)를 등록해두면 최대 레벨 / 비용 곡선 / 프리리퀴짓 등의 메타데이터를 함께 사용한다.
     /// - DontDestroyOnLoad 싱글톤.
+    /// - PlayerPrefs 를 사용해 업그레이드 상태를 저장/로드한다.
     /// </summary>
     [DefaultExecutionOrder(-200)] // ★ 항상 가장 먼저 초기화되도록 실행 순서 앞으로 당김
     public class UpgradeManager : MonoBehaviour
@@ -66,6 +67,25 @@ namespace Pulseforge.Systems
             new(StringComparer.Ordinal);
 
         //==============================================================
+        //  저장 관련
+        //==============================================================
+
+        private const string PlayerPrefsKey = "PF_Upgrades_v1";
+
+        [Serializable]
+        private struct SaveDataEntry
+        {
+            public string id;
+            public int level;
+        }
+
+        [Serializable]
+        private struct SaveData
+        {
+            public SaveDataEntry[] entries;
+        }
+
+        //==============================================================
         //  이벤트
         //==============================================================
 
@@ -93,7 +113,17 @@ namespace Pulseforge.Systems
             DontDestroyOnLoad(gameObject);
 
             BuildDefinitionLookup();
-            InitializeStatesFromInspector();
+
+            // 저장된 상태를 먼저 시도해서 로드, 없으면 인스펙터 초기값 사용
+            if (!TryLoadFromPlayerPrefs())
+            {
+                InitializeStatesFromInspector();
+            }
+        }
+
+        private void OnApplicationQuit()
+        {
+            SaveToPlayerPrefs();
         }
 
         //==============================================================
@@ -163,7 +193,14 @@ namespace Pulseforge.Systems
                 }
             }
 
-            // 정의만 있고 초기 레벨이 없는 항목도 0레벨로 등록
+            EnsureDefinitionStates();
+        }
+
+        /// <summary>
+        /// _defsById 에 있는 모든 정의가 _statesById 에 최소 0레벨 상태로 존재하도록 보장한다.
+        /// </summary>
+        private void EnsureDefinitionStates()
+        {
             foreach (var kvp in _defsById)
             {
                 string id = kvp.Key;
@@ -176,6 +213,130 @@ namespace Pulseforge.Systems
                     level = 0,
                     definition = kvp.Value
                 };
+            }
+        }
+
+        //==============================================================
+        //  저장 / 로드
+        //==============================================================
+
+        private bool TryLoadFromPlayerPrefs()
+        {
+            if (!PlayerPrefs.HasKey(PlayerPrefsKey))
+                return false;
+
+            string json = PlayerPrefs.GetString(PlayerPrefsKey, null);
+            if (string.IsNullOrEmpty(json))
+                return false;
+
+            try
+            {
+                var data = JsonUtility.FromJson<SaveData>(json);
+                if (data.entries == null || data.entries.Length == 0)
+                    return false;
+
+                _statesById.Clear();
+
+                foreach (var entry in data.entries)
+                {
+                    if (string.IsNullOrWhiteSpace(entry.id))
+                        continue;
+
+                    string id = entry.id.Trim();
+                    int level = Mathf.Max(0, entry.level);
+                    var def = GetDefinitionInternal(id);
+
+                    var state = new RuntimeState
+                    {
+                        id = id,
+                        level = level,
+                        definition = def
+                    };
+
+                    int maxLevel = GetMaxLevelInternal(def);
+                    if (state.level > maxLevel)
+                        state.level = maxLevel;
+
+                    _statesById[id] = state;
+                }
+
+                // 정의는 있는데 세이브 데이터에는 없는 항목들 0레벨로 채우기
+                EnsureDefinitionStates();
+
+                if (_logUpgrade)
+                    Debug.Log($"[UpgradeManager] 업그레이드 상태 로드 완료: {_statesById.Count}개");
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[UpgradeManager] 저장된 업그레이드 상태를 불러오는 중 오류 발생: {ex}");
+                return false;
+            }
+        }
+
+        private void SaveToPlayerPrefs()
+        {
+            try
+            {
+                var list = new List<SaveDataEntry>(_statesById.Count);
+                foreach (var kvp in _statesById)
+                {
+                    var state = kvp.Value;
+                    if (state == null)
+                        continue;
+                    if (string.IsNullOrWhiteSpace(state.id))
+                        continue;
+                    // 0레벨은 저장 안 해도 되게 스킵 (선택 사항)
+                    if (state.level <= 0)
+                        continue;
+
+                    list.Add(new SaveDataEntry
+                    {
+                        id = state.id,
+                        level = state.level
+                    });
+                }
+
+                var data = new SaveData
+                {
+                    entries = list.ToArray()
+                };
+
+                string json = JsonUtility.ToJson(data);
+                PlayerPrefs.SetString(PlayerPrefsKey, json);
+                PlayerPrefs.Save();
+
+                if (_logUpgrade)
+                    Debug.Log($"[UpgradeManager] 업그레이드 상태 저장 완료: {list.Count}개");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[UpgradeManager] 업그레이드 상태 저장 중 오류 발생: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// 모든 업그레이드를 0레벨로 리셋하고, 저장 데이터도 삭제한다.
+        /// (디버그/테스트용, 버튼에서 호출 가능)
+        /// </summary>
+        [ContextMenu("Reset All Upgrades")]
+        public void ResetAllUpgrades()
+        {
+            PlayerPrefs.DeleteKey(PlayerPrefsKey);
+
+            _statesById.Clear();
+            InitializeStatesFromInspector();
+
+            if (_logUpgrade)
+                Debug.Log("[UpgradeManager] 모든 업그레이드 리셋 + 저장 데이터 삭제");
+
+            // UI 갱신을 위해 현재 상태를 모두 이벤트로 쏴준다.
+            foreach (var kvp in _statesById)
+            {
+                var state = kvp.Value;
+                if (state == null) continue;
+                OnLevelChanged?.Invoke(state.id, state.level);
             }
         }
 
@@ -319,6 +480,10 @@ namespace Pulseforge.Systems
                 Debug.Log($"[UpgradeManager] '{upgradeId}' 업그레이드 → Lv.{state.level}");
 
             OnLevelChanged?.Invoke(upgradeId, state.level);
+
+            // 레벨 변경 후 즉시 저장
+            SaveToPlayerPrefs();
+
             return true;
         }
 
@@ -338,6 +503,9 @@ namespace Pulseforge.Systems
                 Debug.Log($"[UpgradeManager] '{upgradeId}' 레벨 강제 설정 → Lv.{state.level}");
 
             OnLevelChanged?.Invoke(upgradeId, state.level);
+
+            // 강제 설정도 저장
+            SaveToPlayerPrefs();
         }
 
 #if UNITY_EDITOR

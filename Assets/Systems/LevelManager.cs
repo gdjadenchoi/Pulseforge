@@ -79,6 +79,19 @@ namespace Pulseforge.Systems
         public event Action<int> OnLevelUp;
 
         //==============================================================
+        //  저장 관련 (PlayerPrefs)
+        //==============================================================
+
+        private const string PlayerPrefsKey = "PF_Level_v1";
+
+        [Serializable]
+        private struct SaveData
+        {
+            public int level;
+            public long currentExp;
+        }
+
+        //==============================================================
         //  Unity 라이프사이클
         //==============================================================
 
@@ -97,13 +110,28 @@ namespace Pulseforge.Systems
 
             DontDestroyOnLoad(gameObject);
 
-            InitializeLevel();
+            // 저장된 값 우선 로드, 없으면 기존 초기화 로직 사용
+            if (!TryLoadFromPlayerPrefs())
+            {
+                InitializeLevel();
+            }
+            else
+            {
+                // 로드된 레벨/경험치 기준으로 expToNext 재계산 및 범위 클램프
+                ClampLevelRange();
+                RecalculateExpToNext();
+            }
         }
 
         private void OnEnable()
         {
             RefreshDebugFields();
             FireAllEvents();
+        }
+
+        private void OnApplicationQuit()
+        {
+            SaveToPlayerPrefs();
         }
 
         //==============================================================
@@ -126,9 +154,15 @@ namespace Pulseforge.Systems
         /// <summary>전체 리셋 (디버그용)</summary>
         public void ResetAll()
         {
+            // 저장 데이터 삭제 + 초기화
+            PlayerPrefs.DeleteKey(PlayerPrefsKey);
+
             InitializeLevel();
             RefreshDebugFields();
             FireAllEvents();
+
+            // 리셋 상태를 다시 저장 (선택사항이지만, 일관성을 위해)
+            SaveToPlayerPrefs();
         }
 
         /// <summary>디버그용 인스펙터 값 동기화 (현재는 별도 복제 없음)</summary>
@@ -142,6 +176,86 @@ namespace Pulseforge.Systems
         {
             OnLevelChanged?.Invoke(level);
             OnExpChanged?.Invoke(currentExp, expToNext);
+        }
+
+        private void ClampLevelRange()
+        {
+            if (minLevel < 1) minLevel = 1;
+            if (maxLevel < 1) maxLevel = 1;
+            if (minLevel > maxLevel) minLevel = maxLevel;
+
+            level = Mathf.Clamp(level, minLevel, maxLevel);
+        }
+
+        private void RecalculateExpToNext()
+        {
+            if (level >= maxLevel)
+            {
+                expToNext = 0;
+                currentExp = 0;
+            }
+            else
+            {
+                expToNext = GetRequiredExp(level);
+                if (currentExp < 0) currentExp = 0;
+                if (currentExp > expToNext) currentExp = expToNext;
+            }
+        }
+
+        //==============================================================
+        //  저장 / 로드
+        //==============================================================
+
+        private bool TryLoadFromPlayerPrefs()
+        {
+            if (!PlayerPrefs.HasKey(PlayerPrefsKey))
+                return false;
+
+            string json = PlayerPrefs.GetString(PlayerPrefsKey, null);
+            if (string.IsNullOrEmpty(json))
+                return false;
+
+            try
+            {
+                var data = JsonUtility.FromJson<SaveData>(json);
+
+                // 로드된 값 적용
+                level = data.level;
+                currentExp = data.currentExp;
+
+                if (logExpGain)
+                    Debug.Log($"[LevelManager] Load level={level}, exp={currentExp}");
+
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[LevelManager] 레벨 저장 데이터 로드 중 오류: {e}");
+                return false;
+            }
+        }
+
+        private void SaveToPlayerPrefs()
+        {
+            try
+            {
+                var data = new SaveData
+                {
+                    level = level,
+                    currentExp = currentExp
+                };
+
+                string json = JsonUtility.ToJson(data);
+                PlayerPrefs.SetString(PlayerPrefsKey, json);
+                PlayerPrefs.Save();
+
+                if (logExpGain)
+                    Debug.Log($"[LevelManager] Save level={level}, exp={currentExp}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[LevelManager] 레벨 저장 데이터 저장 중 오류: {e}");
+            }
         }
 
         //==============================================================
@@ -161,7 +275,7 @@ namespace Pulseforge.Systems
         }
 
         //==============================================================
-        //  업그레이드 보정
+        //  ExpGain 업그레이드 연동
         //==============================================================
 
         /// <summary>
@@ -227,6 +341,7 @@ namespace Pulseforge.Systems
                 expToNext = 0;
                 RefreshDebugFields();
                 FireAllEvents();
+                SaveToPlayerPrefs();
                 return;
             }
 
@@ -254,6 +369,12 @@ namespace Pulseforge.Systems
                 expToNext = GetRequiredExp(level);
             }
 
+            // 레벨업이 하나도 안 되었거나, 중간에 expToNext 갱신 필요할 수 있음
+            if (level < maxLevel && expToNext <= 0)
+            {
+                expToNext = GetRequiredExp(level);
+            }
+
             RefreshDebugFields();
 
             if (prevLevel != level)
@@ -261,6 +382,9 @@ namespace Pulseforge.Systems
 
             if (prevExp != currentExp)
                 OnExpChanged?.Invoke(currentExp, expToNext);
+
+            // 변경된 상태 저장
+            SaveToPlayerPrefs();
         }
 
 #if UNITY_EDITOR
