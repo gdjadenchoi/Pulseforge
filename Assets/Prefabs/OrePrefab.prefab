@@ -141,6 +141,7 @@ MonoBehaviour:
   destroyOnBreak: 1
   rewardType: 0
   rewardAmount: 1
+  expAmount: 5
   wobbleOnHit: 1
   wobblePos: 0.035
   wobbleScale: 0.06

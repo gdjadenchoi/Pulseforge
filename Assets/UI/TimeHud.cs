@@ -3,9 +3,9 @@ using TMPro;
 using Pulseforge.Systems;
 
 /// <summary>
-/// ¼¼¼Ç ³²Àº ½Ã°£ Ç¥½Ã UI.
-/// - ±âº» Èò»ö
-/// - criticalThreshold ÀÌÇÏ ½Ã »¡°£»ö + ±ôºıÀÓ
+/// ì„¸ì…˜ ë‚¨ì€ ì‹œê°„ì„ í‘œì‹œí•˜ëŠ” HUD.
+/// - ê¸°ë³¸ì€ í°ìƒ‰ ìˆ«ì
+/// - SessionControllerì—ì„œ criticalThreshold ì´í•˜ë¡œ ë“¤ì–´ê°€ë©´ ë¹¨ê°„ìƒ‰/ê¹œë¹¡ì„ ì²˜ë¦¬
 /// </summary>
 public class TimeHUD : MonoBehaviour
 {
@@ -30,12 +30,13 @@ public class TimeHUD : MonoBehaviour
 
         if (session != null)
         {
-            session.OnTimeChanged += HandleTimeChanged;
-            session.OnCritical += HandleCritical;
-            session.OnSessionStart += HandleSessionStart;
-            session.OnSessionEnd += HandleSessionEnd;
+            // SessionController ì´ë²¤íŠ¸ êµ¬ë…
+            session.OnTimeChanged   += HandleTimeChanged;
+            session.OnCritical      += HandleCritical;
+            session.OnSessionStart  += HandleSessionStart;
+            session.OnSessionEnd    += HandleSessionEnd;
 
-            // ½ÃÀÛ ½Ã ÇÑ ¹ø °»½Å
+            // ì‹œì‘ ì‹œ í•œ ë²ˆ ì´ˆê¸° í‘œì‹œ
             UpdateDisplay(session.Remaining);
         }
         else
@@ -48,15 +49,16 @@ public class TimeHUD : MonoBehaviour
     {
         if (session != null)
         {
-            session.OnTimeChanged -= HandleTimeChanged;
-            session.OnCritical -= HandleCritical;
-            session.OnSessionStart -= HandleSessionStart;
-            session.OnSessionEnd -= HandleSessionEnd;
+            session.OnTimeChanged   -= HandleTimeChanged;
+            session.OnCritical      -= HandleCritical;
+            session.OnSessionStart  -= HandleSessionStart;
+            session.OnSessionEnd    -= HandleSessionEnd;
         }
     }
 
     private void Update()
     {
+        // í¬ë¦¬í‹°ì»¬ êµ¬ê°„ì—ì„œ ê¹œë¹¡ì„ ì²˜ë¦¬
         if (_isCritical && blinkOnCritical && timeText != null)
         {
             _blinkTimer += Time.deltaTime * blinkSpeed;
@@ -70,6 +72,7 @@ public class TimeHUD : MonoBehaviour
         _isCritical = false;
         _blinkTimer = 0;
         UpdateDisplay(session.Remaining);
+
         if (timeText != null)
             timeText.color = normalColor;
 
@@ -78,10 +81,11 @@ public class TimeHUD : MonoBehaviour
 
     private void HandleSessionEnd()
     {
+        // ì„¸ì…˜ ì¢…ë£Œ ì‹œì—ëŠ” íƒ€ì´ë¨¸ë¥¼ ìˆ¨ê²¨ì¤€ë‹¤.
         gameObject.SetActive(false);
     }
 
-    // SessionController.OnTimeChanged(remaining, normalized)
+    // SessionController.OnTimeChanged(remaining, normalized) ëŒ€ì‘
     private void HandleTimeChanged(float remaining, float normalized)
     {
         UpdateDisplay(remaining);
@@ -91,14 +95,18 @@ public class TimeHUD : MonoBehaviour
     {
         _isCritical = true;
         _blinkTimer = 0;
+
         if (!blinkOnCritical && timeText != null)
             timeText.color = criticalColor;
     }
 
     private void UpdateDisplay(float remaining)
     {
-        if (timeText == null) return;
+        if (timeText == null)
+            return;
+
         timeText.text = string.Format(timeFormat, remaining);
+
         if (!_isCritical)
             timeText.color = normalColor;
     }

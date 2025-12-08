@@ -15,6 +15,10 @@ namespace Pulseforge.Systems
         [SerializeField] private RewardType rewardType = RewardType.Crystal;
         [SerializeField] private int rewardAmount = 1;
 
+        [Header("Experience")]
+        [Tooltip("이 광석을 파괴했을 때 부여할 기본 경험치 양")]
+        [SerializeField] private int expAmount = 1;
+
         [Header("Hit Feedback")]
         [SerializeField] private bool wobbleOnHit = true;
         [SerializeField] private float wobblePos = 0.035f;
@@ -44,8 +48,13 @@ namespace Pulseforge.Systems
         private static Sprite _onePxSprite;
         private SpriteRenderer mySprite;
         private int mySortingOrder;
+
         private bool barDirty;
+
+        // wobble
         private Coroutine wobbleCo;
+        private Vector3 basePos;
+        private Vector3 baseScale;
 
         private void Awake()
         {
@@ -89,6 +98,11 @@ namespace Pulseforge.Systems
             if (rewardAmount > 0)
                 RewardManager.Instance?.Add(rewardType, rewardAmount);
 
+            // ✅ 경험치 지급 (LevelManager 연동)
+            //   → 지금은 광석 타입에 따라 계수 안 붙이고, 기본 양만 넘김
+            if (expAmount > 0 && LevelManager.Instance != null)
+                LevelManager.Instance.AddExp(expAmount);
+
             if (destroyOnBreak)
                 Destroy(gameObject);
             else
@@ -98,29 +112,30 @@ namespace Pulseforge.Systems
             }
         }
 
-        // ── HP BAR ──────────────────────────────────────────────────────────────
+        // ── HP Bar 생성/갱신 ─────────────────────────────────────────────────────
         private void EnsureBarBuilt()
         {
+            if (!showHpBar) return;
+
             if (_onePxSprite == null)
-            {
-                var tex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
-                tex.SetPixel(0, 0, Color.white);
-                tex.Apply();
-                _onePxSprite = Sprite.Create(tex, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f), 1f);
-                _onePxSprite.name = "_pf_onePx";
-            }
+                _onePxSprite = BuildOnePxSprite();
 
             if (barRoot == null)
             {
-                var root = new GameObject("_HPBar");
-                root.transform.SetParent(transform, false);
-                barRoot = root.transform;
+                barRoot = new GameObject("HPBar").transform;
+                barRoot.SetParent(transform, false);
+            }
 
+            if (srBg == null)
+            {
                 var bg = new GameObject("BG");
                 bg.transform.SetParent(barRoot, false);
                 srBg = bg.AddComponent<SpriteRenderer>();
                 srBg.sprite = _onePxSprite;
+            }
 
+            if (srFill == null)
+            {
                 var fill = new GameObject("Fill");
                 fill.transform.SetParent(barRoot, false);
                 srFill = fill.AddComponent<SpriteRenderer>();
@@ -153,44 +168,75 @@ namespace Pulseforge.Systems
             if (minOnePixelThickness && referencePPU > 0)
                 height = Mathf.Max(height, 1f / referencePPU);
 
-            barRoot.localPosition = new Vector3(0f, yOff, 0f);
+            if (barRoot)
+            {
+                barRoot.localPosition = new Vector3(0, yOff, 0);
 
-            srBg.transform.localPosition = Vector3.zero;
-            srFill.transform.localPosition = Vector3.zero;
+                if (srBg)
+                {
+                    srBg.transform.localPosition = Vector3.zero;
+                    srBg.transform.localScale = new Vector3(barSize.x, height, 1f);
+                }
 
-            srBg.transform.localScale = new Vector3(barSize.x, height, 1f);
-            srFill.transform.localScale = new Vector3(barSize.x, height, 1f);
+                if (srFill)
+                {
+                    srFill.transform.localPosition = new Vector3(-barSize.x * 0.5f, 0f, 0f);
+                    srFill.transform.localScale = new Vector3(barSize.x, height, 1f);
+                }
+            }
         }
 
         private void UpdateBarFill()
         {
-            float t = Mathf.Approximately(maxHp, 0f) ? 0f : Mathf.Clamp01(hp / maxHp);
-            float W = barSize.x;
-            float newW = W * t;
+            if (srFill == null) return;
 
-            srFill.transform.localScale = new Vector3(newW, srBg.transform.localScale.y, 1f);
-            srFill.transform.localPosition = new Vector3(-(W - newW) * 0.5f, 0f, 0f);
+            float t = Mathf.Approximately(maxHp, 0f) ? 0f : Mathf.Clamp01(hp / maxHp);
+
+            var scale = srFill.transform.localScale;
+            scale.x = barSize.x * t;
+            srFill.transform.localScale = scale;
         }
 
-        private void MarkBarDirty() => barDirty = true;
+        private static Sprite BuildOnePxSprite()
+        {
+            var tex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+            tex.SetPixel(0, 0, Color.white);
+            tex.Apply();
 
-        // ── WOBBLE ──────────────────────────────────────────────────────────────
+            var sprite = Sprite.Create(tex, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f), 1f);
+            sprite.name = "OnePxSprite_Runtime";
+            return sprite;
+        }
+
+        private void MarkBarDirty()
+        {
+            barDirty = true;
+        }
+
+        // ── Wobble ─────────────────────────────────────────────────────────────
         private void PlayWobble()
         {
-            if (wobbleCo != null) StopCoroutine(wobbleCo);
+            if (wobbleCo != null)
+            {
+                StopCoroutine(wobbleCo);
+            }
+
             wobbleCo = StartCoroutine(CoWobble());
         }
 
         private IEnumerator CoWobble()
         {
-            float t = 0f;
-            Vector3 basePos = transform.localPosition;
-            Vector3 baseScale = transform.localScale;
+            if (mySprite == null)
+                mySprite = GetComponentInChildren<SpriteRenderer>();
 
+            basePos = transform.localPosition;
+            baseScale = transform.localScale;
+
+            float t = 0f;
             while (t < wobbleDuration)
             {
                 t += Time.deltaTime;
-                float n = 1f - (t / wobbleDuration);
+                float n = Mathf.Clamp01(t / wobbleDuration);
 
                 float offX = Mathf.Sin(t * 62.83f) * wobblePos * n;
                 float scl = 1f + (Mathf.Sin(t * 94.25f) * wobbleScale * n);

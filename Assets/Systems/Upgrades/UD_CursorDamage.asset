@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f66bb38761e381c4a83ed552968ed735, type: 3}
+  m_Name: UD_CursorDamage
+  m_EditorClassIdentifier: 
+  id: CursorDamage
+  displayName: "\uB370\uBBF8\uC9C0 \uC99D\uAC00"
+  description: 
+  icon: {fileID: 0}
+  maxLevel: 999
+  costCurveType: 0
+  baseCost: 10
+  costStep: 5
+  costFactor: 1.5
+  effectKey: 
+  valueType: 0
+  valuePerLevel: 1
+  prerequisites: []

@@ -11,6 +11,10 @@ namespace Pulseforge.Systems
     {
         public enum RadiusSource { Fixed, FromSprite }
 
+        // 🔸 새 string 기반 업그레이드 키
+        private const string UpgradeIdCursorRadius = "CursorRadius";
+        private const string UpgradeIdCursorDamage = "CursorDamage";
+
         [Header("Movement")]
         [SerializeField] private float followLerp = 14f;
 
@@ -43,25 +47,36 @@ namespace Pulseforge.Systems
         private Rigidbody2D _rb;
         private float _swingTimer;
 
+        // 커서 원래 스케일 저장용
+        private Vector3 _baseCursorScale = Vector3.one;
+
         private const int kBuffer = 64;
         private readonly Collider2D[] _hits = new Collider2D[kBuffer];
 
         private void Awake()
         {
             _rb = GetComponent<Rigidbody2D>();
+
+            // 스프라이트 렌더러 없으면 자식에서 찾아보기
             if (cursorRenderer == null)
                 cursorRenderer = GetComponentInChildren<SpriteRenderer>(true);
+
             if (cursorRenderer != null)
+            {
                 cursorRenderer.sortingOrder = cursorSortingOrder;
+                _baseCursorScale = cursorRenderer.transform.localScale; // 원래 스케일 저장
+            }
         }
 
         private void OnEnable()
         {
-            if (_cam == null) _cam = Camera.main;
+            if (_cam == null)
+                _cam = Camera.main;
         }
 
         private void Update()
         {
+            // 포인터 위치 따라가기
             if (!TryGetPointerScreenPosition(out var screenPos))
                 return;
 
@@ -69,6 +84,7 @@ namespace Pulseforge.Systems
             {
                 var world = (Vector3)_cam.ScreenToWorldPoint(screenPos);
                 world.z = 0f;
+
                 transform.position = Vector3.Lerp(
                     transform.position,
                     world,
@@ -76,12 +92,16 @@ namespace Pulseforge.Systems
                 );
             }
 
+            // 스윙 타이머
             _swingTimer += Time.deltaTime;
             if (_swingTimer >= swingInterval)
             {
                 _swingTimer = 0f;
                 DoSwingHit();
             }
+
+            // 🔸 업그레이드 레벨에 따라 시각적 스케일 갱신
+            UpdateVisualScale();
         }
 
         private bool TryGetPointerScreenPosition(out Vector3 screenPos)
@@ -92,6 +112,7 @@ namespace Pulseforge.Systems
                 screenPos = Mouse.current.position.ReadValue();
                 return true;
             }
+
             if (Touchscreen.current != null)
             {
                 foreach (var t in Touchscreen.current.touches)
@@ -113,6 +134,8 @@ namespace Pulseforge.Systems
         private float GetCurrentRadius()
         {
             float r;
+
+            // 1) 기본 반경 계산 (기존 로직 유지)
             if (radiusSource == RadiusSource.FromSprite && cursorRenderer != null)
             {
                 var ext = cursorRenderer.bounds.extents;
@@ -122,7 +145,17 @@ namespace Pulseforge.Systems
             {
                 r = fixedRadius;
             }
-            // 과도한 값 방지(세로 폰 기준 안전 가드)
+
+            // 2) 업그레이드: CursorRadius 레벨에 따른 고정 증가
+            var upgradeManager = UpgradeManager.Instance;
+            if (upgradeManager != null)
+            {   
+                int radiusLevel = upgradeManager.GetLevel(UpgradeIdCursorRadius);
+                const float radiusPerLevel = 0.05f;
+                r += radiusLevel * radiusPerLevel;
+            }
+
+            // 3) 과도한 값 방지
             return Mathf.Clamp(r, 0.05f, 2.5f);
         }
 
@@ -138,6 +171,18 @@ namespace Pulseforge.Systems
             int applied = 0;
             bool useMask = oreMask.value != 0;
 
+            // 🔸 기본 데미지 + 업그레이드 레벨에 따른 고정 증가
+            float finalDamage = damagePerSwing;
+            var upgradeManager = UpgradeManager.Instance;
+            if (upgradeManager != null)
+            {
+                int dmgLevel = upgradeManager.GetLevel(UpgradeIdCursorDamage);
+                const float flatPerLevel = 1f;
+                finalDamage += dmgLevel * flatPerLevel;
+
+                if (finalDamage < 0f)
+                    finalDamage = 0f;
+            }
             for (int i = 0; i < total; i++)
             {
                 var col = _hits[i];
@@ -147,13 +192,15 @@ namespace Pulseforge.Systems
 
                 if (col.TryGetComponent<Ore>(out var ore))
                 {
-                    ore.ApplyHit(damagePerSwing);
+                    ore.ApplyHit(finalDamage);
                     applied++;
                 }
             }
 
             if (logHitCount && applied > 0)
-                Debug.Log($"[DrillCursor] Hit ores: {applied} (r={radius:F2}, pad={detectPadding:F2})");
+            {
+                Debug.Log($"[DrillCursor] Hit ores: {applied} (r={radius:F2}, pad={detectPadding:F2}, dmg={finalDamage:F1})");
+            }
         }
 
         private void OnDrawGizmosSelected()
@@ -161,6 +208,35 @@ namespace Pulseforge.Systems
             float r = Application.isPlaying ? GetCurrentRadius() : fixedRadius;
             Gizmos.color = gizmoRadiusColor;
             Gizmos.DrawWireSphere(transform.position, r + detectPadding);
+        }
+
+        /// <summary>
+        /// CursorRadius 업그레이드 레벨에 따라 커서 스프라이트 크기를 조정
+        /// (판정 반경은 이미 GetCurrentRadius()에서 따로 처리 중)
+        /// </summary>
+        private void UpdateVisualScale()
+        {
+            if (cursorRenderer == null)
+                return;
+
+            var upgradeManager = UpgradeManager.Instance;
+            if (upgradeManager == null)
+            {
+                // 업그레이드 매니저가 없으면 기본 스케일 유지
+                cursorRenderer.transform.localScale = _baseCursorScale;
+                return;
+            }
+
+            int radiusLevel = upgradeManager.GetLevel(UpgradeIdCursorRadius);
+
+            // 레벨 1당 7%씩 커지도록
+            const float scalePerLevel = 0.07f;
+            float scaleFactor = 1f + radiusLevel * scalePerLevel;
+
+            if (scaleFactor < 0.1f)
+                scaleFactor = 0.1f;
+
+            cursorRenderer.transform.localScale = _baseCursorScale * scaleFactor;
         }
     }
 }

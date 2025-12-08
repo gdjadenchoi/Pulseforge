@@ -5,9 +5,12 @@ using System.Linq;
 using TMPro;
 using UnityEngine;
 using Pulseforge.Systems;
-// ¶Ç´Â RewardType.cs / RewardManager.cs ¸Ç À§¿¡ ÀûÈù ³×ÀÓ½ºÆäÀÌ½º ±×´ë·Î
 
-
+/// <summary>
+/// ìƒë‹¨ TopBarì—ì„œ ìì›(Crystal, Gold, Shard ë“±)ì„ í‘œì‹œí•˜ëŠ” HUD.
+/// - ë‹¨ì¼ íƒ€ì… ë˜ëŠ” ì „ì²´ íƒ€ì…ì„ í•œ ì¤„ì— í‘œì‹œ ê°€ëŠ¥
+/// - í˜„ì¬ëŠ” ì£¼ê¸°ì  í´ë§ ë°©ì‹ìœ¼ë¡œ RewardManager ê°’ì„ ì½ì–´ì˜¨ë‹¤.
+/// </summary>
 public class ResourceHUD : MonoBehaviour
 {
     [Header("Target")]
@@ -15,45 +18,53 @@ public class ResourceHUD : MonoBehaviour
     [SerializeField] private RewardManager rewardManager;
 
     [Header("Display Mode")]
-    [SerializeField] private bool showAllTypes = false; // true¸é ¸ğµç ¸®¼Ò½º¸¦ ÇÑ ÁÙ¿¡ Ç¥½Ã
-    [SerializeField] private RewardType rewardType = RewardType.Crystal; // ´ÜÀÏ Ç¥½Ã ¸ğµåÀÏ ¶§ »ç¿ë
+    [Tooltip("trueë©´ ëª¨ë“  ë¦¬ì†ŒìŠ¤ë¥¼ í•œ ì¤„ì— í‘œì‹œ, falseë©´ íŠ¹ì • íƒ€ì…ë§Œ í‘œì‹œ")]
+    [SerializeField] private bool showAllTypes = false;
+
+    [Tooltip("ë‹¨ì¼ í‘œì‹œ ëª¨ë“œì¼ ë•Œ ì‚¬ìš©í•  ë¦¬ì†ŒìŠ¤ íƒ€ì…")]
+    [SerializeField] private RewardType rewardType = RewardType.Crystal;
 
     [Header("Formats")]
-    [Tooltip("´ÜÀÏ ¸®¼Ò½º Ç¥½Ã Æ÷¸Ë. {label} °ú {value}¸¦ »ç¿ëÇÒ ¼ö ÀÖÀ½")]
+    [Tooltip("ë‹¨ì¼ ë¦¬ì†ŒìŠ¤ í‘œì‹œ í¬ë§·. {label} ê³¼ {value}ë¥¼ ì‚¬ìš©í•  ìˆ˜ ìˆìŒ")]
     [SerializeField] private string singleFormat = "{label} {value}";
-    [Tooltip("¸ğµç ¸®¼Ò½º Ç¥½Ã ½Ã Ç×¸ñ »çÀÌ ±¸ºĞÀÚ")]
+
+    [Tooltip("ëª¨ë“  ë¦¬ì†ŒìŠ¤ í‘œì‹œ ì‹œ, í•­ëª© ì‚¬ì´ì— ë„£ì„ êµ¬ë¶„ì")]
     [SerializeField] private string allJoinSeparator = "  |  ";
 
-    [Tooltip("¶óº§À» °­Á¦·Î ÁöÁ¤ÇÏ°í ½ÍÀ¸¸é ÀÔ·Â(ºñ¿ì¸é Enum ÀÌ¸§ »ç¿ë)")]
+    [Tooltip("ë¼ë²¨ í…ìŠ¤íŠ¸ë¥¼ ê°•ì œë¡œ ì§€ì •í•˜ê³  ì‹¶ìœ¼ë©´ ì…ë ¥ (ë¹„ìš°ë©´ Enum ì´ë¦„ ì‚¬ìš©)")]
     [SerializeField] private string labelOverride = "";
 
     [Header("Refresh")]
-    [Tooltip("UI °»½Å ÁÖ±â(ÃÊ). °ª º¯°æ ÀÌº¥Æ®°¡ ¾ø´Ù¸é Æú¸µ·Î °»½Å")]
+    [Tooltip("UI ê°±ì‹  ì£¼ê¸°(ì´ˆ). ì´ë²¤íŠ¸ ê¸°ë°˜ì´ ì•„ë‹ˆë¼ í´ë§ìœ¼ë¡œ ê°±ì‹ í•  ë•Œ ì‚¬ìš©")]
     [SerializeField] private float refreshInterval = 0.1f;
 
-    Coroutine refreshRoutine;
+    private Coroutine refreshRoutine;
 
     private void Awake()
     {
-        if (!resourceText) resourceText = GetComponentInChildren<TMP_Text>();
-        if (!rewardManager) rewardManager = FindAnyObjectByType<RewardManager>(FindObjectsInactive.Include);
+        if (!resourceText)
+            resourceText = GetComponentInChildren<TMP_Text>();
+
+        if (!rewardManager)
+            rewardManager = FindAnyObjectByType<RewardManager>(FindObjectsInactive.Include);
     }
 
     private void OnEnable()
     {
-        // Æú¸µ ·çÇÁ
+        // í´ë§ ë£¨í”„ ì‹œì‘
         refreshRoutine = StartCoroutine(RefreshLoop());
-        // RewardManager¿¡ UnityEvent°¡ ÀÖ´Ù¸é ¿©±â¿¡ ¿¬°áÇØµµ µÊ:
-        // rewardManager.OnChanged.AddListener((type, value) => RefreshImmediate());
+
+        // ë‚˜ì¤‘ì— ì´ë²¤íŠ¸ ê¸°ë°˜ìœ¼ë¡œ ë°”ê¾¸ê³  ì‹¶ë‹¤ë©´,
+        // RewardManager.OnChanged ë“±ì— ë¦¬ìŠ¤ë„ˆë¥¼ ë¶™ì—¬ì„œ ë°”ë¡œ RefreshImmediate()ë¥¼ í˜¸ì¶œí•  ìˆ˜ë„ ìˆìŒ.
     }
 
     private void OnDisable()
     {
-        if (refreshRoutine != null) StopCoroutine(refreshRoutine);
-        // rewardManager?.OnChanged.RemoveListener(...);
+        if (refreshRoutine != null)
+            StopCoroutine(refreshRoutine);
     }
 
-    IEnumerator RefreshLoop()
+    private IEnumerator RefreshLoop()
     {
         var wait = new WaitForSeconds(refreshInterval);
         while (true)
@@ -63,43 +74,54 @@ public class ResourceHUD : MonoBehaviour
         }
     }
 
-    void RefreshImmediate()
+    private void RefreshImmediate()
     {
-        if (!resourceText || !rewardManager) return;
+        if (!resourceText || !rewardManager)
+            return;
 
         if (showAllTypes)
         {
-            // ¸ğµç RewardTypeÀ» ³ª¿­
+            // ëª¨ë“  RewardTypeì„ ë‚˜ì—´í•´ì„œ í•œ ì¤„ë¡œ ë¶™ì¸ë‹¤.
             var items = Enum.GetValues(typeof(RewardType))
                 .Cast<RewardType>()
                 .Select(rt => $"{GetLabel(rt)} {SafeGet(rt)}");
+
             resourceText.text = string.Join(allJoinSeparator, items);
         }
         else
         {
-            // ´ÜÀÏ Å¸ÀÔ
-            string label = string.IsNullOrWhiteSpace(labelOverride) ? GetLabel(rewardType) : labelOverride;
+            // ë‹¨ì¼ íƒ€ì… í‘œì‹œ
+            string label = string.IsNullOrWhiteSpace(labelOverride)
+                ? GetLabel(rewardType)
+                : labelOverride;
+
             resourceText.text = singleFormat
                 .Replace("{label}", label)
                 .Replace("{value}", SafeGet(rewardType).ToString());
         }
     }
 
-    int SafeGet(RewardType rt)
+    private int SafeGet(RewardType rt)
     {
-        try { return rewardManager.Get(rt); }
-        catch { return 0; }
+        try
+        {
+            return rewardManager.Get(rt);
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
-    string GetLabel(RewardType rt)
+    private string GetLabel(RewardType rt)
     {
-        // Enum ÀÌ¸§À» ±×´ë·Î ¾²µÇ, ÇÊ¿ä ½Ã °£´ÜÈ÷ Ä¿½ºÅÒ
+        // í•„ìš”í•˜ë©´ ì—¬ê¸°ì„œ í•œê¸€ ë¼ë²¨ë¡œ ë°”ê¿”ë„ ë¨.
         return rt switch
         {
             RewardType.Crystal => "Crystal",
-            RewardType.Gold => "Gold",
-            RewardType.Shard => "Shard",
-            _ => rt.ToString()
+            RewardType.Gold    => "Gold",
+            RewardType.Shard   => "Shard",
+            _                  => rt.ToString()
         };
     }
 }

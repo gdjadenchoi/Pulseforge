@@ -5,6 +5,8 @@ namespace Pulseforge.Systems
 {
     public class OreSpawner : MonoBehaviour
     {
+        private const string UpgradeIdOreAmount = "OreAmount";
+
         [Header("Spawn Settings")]
         [Tooltip("생성할 광석 프리팹")]
         public GameObject orePrefab;
@@ -15,64 +17,57 @@ namespace Pulseforge.Systems
         [Tooltip("Rect 영역을 쓰지 않을 때 사용하는 원형 반경 (레거시용)")]
         public float radius = 5f;
 
-        [Header("Spawn Area (Rect)")]
-        [Tooltip("체크하면 사각형 영역을 사용해서 스폰")]
+        [Header("Rect Spawn Area (New)")]
+        [Tooltip("Rect 영역 기반 스폰을 사용할지 여부")]
         public bool useRectArea = true;
 
-        [Tooltip("사각형 스폰 영역 크기 (월드 기준)")]
-        public Vector2 areaSize = new Vector2(4f, 6f);
+        [Tooltip("스폰 영역의 크기 (폭, 높이)")]
+        public Vector2 areaSize = new Vector2(10f, 6f);
 
-        [Tooltip("스폰 영역 중심의 오프셋 (Spawner 위치 기준)")]
+        [Tooltip("스폰 영역의 중심 오프셋 (Spawner 기준)")]
         public Vector2 areaOffset = Vector2.zero;
 
-        [Header("Placement / 간격 & 타일 느낌")]
-        [Tooltip("광석들 사이의 최소 거리 (월드 단위)")]
-        public float minDistance = 0.6f;
-
-        [Tooltip("겹치지 않는 위치를 찾기 위한 최대 시도 횟수")]
-        public int maxPlacementAttempts = 30;
-
-        [Tooltip("체크하면 그리드에 스냅되어 '타일'처럼 배치됨")]
+        [Header("Grid Settings")]
+        [Tooltip("그리드 스냅을 사용할지 여부")]
         public bool useGrid = true;
 
-        [Tooltip("그리드 셀 크기 (월드 단위)")]
-        public float gridCellSize = 0.5f;
+        [Tooltip("그리드 셀 간격 (월드 단위)")]
+        public float gridSize = 0.5f;
 
-        [Header("Respawn / 리스폰 설정")]
-        [Tooltip("항상 유지하려는 기본 광석 개수")]
+        [Header("Spawn Distance Rules")]
+        [Tooltip("광석 간 최소 거리")]
+        public float minDistance = 0.5f;
+
+        [Tooltip("너무 많이 실패했을 때, 강제로 배치 시도하는 최대 횟수")]
+        public int maxAttemptsPerSpawn = 32;
+
+        [Header("Respawn Settings")]
+        [Tooltip("광석 개수를 유지하려는 목표 수(초기값은 initialCount와 동일하게 두어도 됨)")]
         public int baseTargetCount = 12;
 
-        [Tooltip("리스폰 배치 사이의 최소 딜레이 (초)")]
-        public float respawnDelay = 0.3f;
+        [Tooltip("리스폰 체크 주기(초)")]
+        public float respawnInterval = 0.3f;
 
-        [Tooltip("리스폰 한 번에 생성할 최소 개수")]
-        public int batchMin = 1;
-
-        [Tooltip("리스폰 한 번에 생성할 최대 개수")]
+        [Tooltip("한 번에 리스폰할 수 있는 최대 수")]
         public int batchMax = 3;
 
-        [Header("Upgrade Modifiers (아직 사용 X, 자리만 잡아둠)")]
-        [Tooltip("업그레이드로 추가되는 고정 보너스 수량")]
-        public int upgradeFlatBonus = 0;
+        [Header("Time Ramp Settings")]
+        [Tooltip("시간 경과에 따라 목표 광석 수를 늘릴지 여부")]
+        public bool useTimeRamp = false;
 
-        [Tooltip("업그레이드로 곱해지는 배수")]
-        public float upgradeMultiplier = 1f;
+        [Tooltip("광석 수가 증가하기까지 걸리는 시간(초)")]
+        public float timeRampInterval = 10f;
 
-        [Header("Debug Time Ramp (시간 지나면서 점점 많아지게)")]
-        [Tooltip("체크하면 시간이 지날수록 목표 개수를 늘림")]
-        public bool timeRampEnabled = false;
-
-        [Tooltip("몇 초마다")]
-        public float addEveryNSeconds = 10f;
-
-        [Tooltip("한 번에 추가할 개수")]
+        [Tooltip("증가하는 광석 수(한 단계마다 추가)")]
         public int addAmount = 5;
 
-        [Tooltip("추가되는 최대 개수 (baseTargetCount 기준)")]
-        public int maxExtra = 50;
+        [Tooltip("추가되는 광석 수의 최대치(0 이하면 무제한)")]
+        public int maxExtraFromTimeRamp = 0;
 
-        // ==== 내부 상태 ====
+        // 내부 관리용 리스트
         private readonly List<Transform> _spawned = new List<Transform>();
+
+        // 리스폰/타임램프용 타이머
         private float _respawnTimer;
         private float _timeRampTimer;
         private int _extraFromTimeRamp;
@@ -80,234 +75,265 @@ namespace Pulseforge.Systems
         // 세션 중 활성 여부 (세션 끝나면 false, 다시 시작하면 true)
         private bool _isActive = true;
 
-        private int TargetCount => baseTargetCount + _extraFromTimeRamp;
+        /// <summary>
+        /// 현재 세션에서 유지하려는 목표 광석 수.
+        /// - baseTargetCount + 시간 램프 증가분 + 업그레이드 보너스를 모두 포함.
+        /// </summary>
+        private int TargetCount
+        {
+            get
+            {
+                int extra = 0;
+                var upgrade = UpgradeManager.Instance;
+                if (upgrade != null)
+                {
+                    // 예전 GetOreAmountBonus()와 동일한 로직:
+                    // level * 5
+                    int level = upgrade.GetLevel(UpgradeIdOreAmount);
+                    const int amountPerLevel = 5;
+                    extra = level * amountPerLevel;
+                }
+
+                return baseTargetCount + extra;
+            }
+        }
+
+        #region Unity Lifecycle
 
         private void Awake()
         {
-            // 인스펙터에서 baseTargetCount를 안 건드렸다면 initialCount 기준으로 맞춰줌
-            if (baseTargetCount <= 0)
-                baseTargetCount = initialCount;
+            // 초기 리스트 클리어 (혹시 에디터 상에 남아 있을 수 있으므로)
+            _spawned.Clear();
 
-            // 첫 세션 시작용 초기 스폰
+            // baseTargetCount를 초기값 기준으로 자동 세팅해두기
+            if (baseTargetCount < initialCount)
+            {
+                baseTargetCount = initialCount;
+            }
+
+            // 초기 스폰
             SpawnInitial();
         }
 
         private void Update()
         {
-            // 세션이 끝난 동안에는 리스폰 로직 완전히 멈춤
             if (!_isActive)
                 return;
 
-            CleanupDestroyed();
-            HandleTimeRamp();
-            HandleRespawn();
+            // 리스폰 타이머
+            _respawnTimer += Time.deltaTime;
+            if (_respawnTimer >= respawnInterval)
+            {
+                _respawnTimer -= respawnInterval;
+                HandleRespawn();
+            }
+
+            // 시간 경과에 따른 목표 수 증가
+            if (useTimeRamp)
+            {
+                _timeRampTimer += Time.deltaTime;
+                if (_timeRampTimer >= timeRampInterval)
+                {
+                    _timeRampTimer -= timeRampInterval;
+                    IncreaseTargetFromTimeRamp();
+                }
+            }
         }
 
-        #region 초기 스폰
+        #endregion
+
+        #region Public API (SessionController 등에서 사용)
+
+        /// <summary>
+        /// 세션이 끝날 때 호출: 리스폰 정지 + 기존 광석 삭제
+        /// </summary>
+        public void PauseAndClear()
+        {
+            _isActive = false;
+            ClearAll();
+        }
+
+        /// <summary>
+        /// 세션 재시작 시 호출: 내부 상태 리셋 + 초기 스폰 다시 수행
+        /// </summary>
+        public void StartFresh()
+        {
+            _isActive = true;
+
+            // 타이머 및 시간 램프 누적치 초기화
+            _respawnTimer = 0f;
+            _timeRampTimer = 0f;
+            _extraFromTimeRamp = 0;
+
+            ClearAll();
+            SpawnInitial();
+        }
+
+        #endregion
+
+        #region Spawn Core
 
         private void SpawnInitial()
         {
-            _spawned.Clear();
+            if (orePrefab == null)
+            {
+                Debug.LogWarning("[OreSpawner] orePrefab이 설정되어 있지 않습니다.");
+                return;
+            }
 
-            int count = Mathf.Max(initialCount, 0);
-            SpawnBatch(count);
+            int toSpawn = Mathf.Max(0, initialCount);
+            for (int i = 0; i < toSpawn; i++)
+            {
+                TrySpawnOne();
+            }
         }
-
-        #endregion
-
-        #region 리스폰 로직
 
         private void HandleRespawn()
         {
-            _respawnTimer -= Time.deltaTime;
-            if (_respawnTimer > 0f)
+            // 현재 살아있는(존재하는) 광석 수
+            CleanupNulls();
+            int current = _spawned.Count;
+
+            int target = TargetCount;
+            if (current >= target)
                 return;
 
-            int missing = TargetCount - _spawned.Count;
-            if (missing <= 0)
-                return;
+            int needed = target - current;
 
-            // 한 번에 1 ~ batchMax 개, 하지만 부족한 수량 이상으로는 안 뽑게
-            int desiredBatch = Random.Range(batchMin, batchMax + 1);
-            int batchSize = Mathf.Clamp(desiredBatch, 1, missing);
-
-            SpawnBatch(batchSize);
-
-            _respawnTimer = respawnDelay;
+            // 한 번에 1 ~ batchMax 개,
+            int batch = Mathf.Min(needed, batchMax);
+            for (int i = 0; i < batch; i++)
+            {
+                TrySpawnOne();
+            }
         }
 
-        private void HandleTimeRamp()
+        private void IncreaseTargetFromTimeRamp()
         {
-            if (!timeRampEnabled)
+            // maxExtraFromTimeRamp 가 0 이하이면 무제한으로 증가
+            if (maxExtraFromTimeRamp > 0 &&
+                _extraFromTimeRamp >= maxExtraFromTimeRamp)
                 return;
 
-            if (addEveryNSeconds <= 0f || addAmount <= 0)
+            _extraFromTimeRamp += addAmount;
+        }
+
+        private void TrySpawnOne()
+        {
+            if (orePrefab == null)
                 return;
 
-            _timeRampTimer += Time.deltaTime;
-            while (_timeRampTimer >= addEveryNSeconds)
+            Vector3 position;
+            bool success = FindValidPosition(out position);
+
+            if (!success)
             {
-                _timeRampTimer -= addEveryNSeconds;
-                _extraFromTimeRamp = Mathf.Clamp(_extraFromTimeRamp + addAmount, 0, maxExtra);
+                // 실패 시에는 그냥 포기 (너무 좁거나 조건이 빡셀 수 있음)
+                // 필요하다면 여기서 로그를 찍어도 됨
+                return;
             }
+
+            GameObject oreObj = Instantiate(orePrefab, position, Quaternion.identity, transform);
+            _spawned.Add(oreObj.transform);
         }
 
         #endregion
 
-        #region 스폰 배치
+        #region Positioning / Validation
 
-        private void SpawnBatch(int count)
+        private bool FindValidPosition(out Vector3 result)
         {
-            if (orePrefab == null || count <= 0)
-                return;
+            result = Vector3.zero;
 
-            for (int i = 0; i < count; i++)
+            // 스폰 영역 기준 중심
+            Vector3 center = transform.position;
+            if (useRectArea)
             {
-                if (!TryGetFreePosition(out Vector3 pos))
-                    break;
-
-                var instance = Instantiate(orePrefab, pos, Quaternion.identity, transform);
-                _spawned.Add(instance.transform);
+                center += (Vector3)areaOffset;
             }
-        }
 
-        private bool TryGetFreePosition(out Vector3 position)
-        {
-            Vector3 center = transform.position + (Vector3)areaOffset;
-
-            for (int attempt = 0; attempt < maxPlacementAttempts; attempt++)
+            // 여러 번 시도해서, 기존 광석과의 최소 거리 조건을 만족하는 위치를 찾는다.
+            for (int attempt = 0; attempt < maxAttemptsPerSpawn; attempt++)
             {
                 Vector3 candidate;
 
                 if (useRectArea)
                 {
-                    float x = (Random.value - 0.5f) * areaSize.x;
-                    float y = (Random.value - 0.5f) * areaSize.y;
+                    // Rect 영역 내부의 랜덤 위치
+                    float halfX = areaSize.x * 0.5f;
+                    float halfY = areaSize.y * 0.5f;
+                    float x = Random.Range(-halfX, halfX);
+                    float y = Random.Range(-halfY, halfY);
                     candidate = center + new Vector3(x, y, 0f);
                 }
                 else
                 {
-                    Vector2 inside = Random.insideUnitCircle * radius;
-                    candidate = transform.position + (Vector3)inside;
+                    // 원형 반경 내 랜덤 위치 (레거시)
+                    Vector2 rand = Random.insideUnitCircle * radius;
+                    candidate = center + (Vector3)rand;
                 }
 
-                // 타일 느낌을 위해 그리드 스냅
-                if (useGrid && gridCellSize > 0.0001f)
+                // 그리드 스냅 적용
+                if (useGrid && gridSize > 0f)
                 {
-                    candidate.x = Mathf.Round(candidate.x / gridCellSize) * gridCellSize;
-                    candidate.y = Mathf.Round(candidate.y / gridCellSize) * gridCellSize;
+                    candidate.x = Mathf.Round(candidate.x / gridSize) * gridSize;
+                    candidate.y = Mathf.Round(candidate.y / gridSize) * gridSize;
                 }
 
-                // 기존 광석들과 최소 거리 체크
-                bool overlapped = false;
-                float minSqr = minDistance * minDistance;
-
-                for (int i = 0; i < _spawned.Count; i++)
+                // 기존 광석들과의 최소 거리 체크
+                if (!IsTooClose(candidate))
                 {
-                    var t = _spawned[i];
-                    if (t == null) continue;
-
-                    float sqr = (t.position - candidate).sqrMagnitude;
-                    if (sqr < minSqr)
-                    {
-                        overlapped = true;
-                        break;
-                    }
-                }
-
-                if (!overlapped)
-                {
-                    position = candidate;
+                    result = candidate;
                     return true;
                 }
             }
 
-            // 실패
-            position = Vector3.zero;
+            return false;
+        }
+
+        private bool IsTooClose(Vector3 candidate)
+        {
+            float minSqr = minDistance * minDistance;
+            for (int i = 0; i < _spawned.Count; i++)
+            {
+                Transform t = _spawned[i];
+                if (t == null)
+                    continue;
+
+                float sqr = (t.position - candidate).sqrMagnitude;
+                if (sqr < minSqr)
+                    return true;
+            }
             return false;
         }
 
         #endregion
 
-        #region 세션 연동용 API
+        #region Maintenance Helpers
 
-        /// <summary>
-        /// 세션 종료 시 호출.  
-        /// - 모든 광석 삭제  
-        /// - 리스폰/타임램프 타이머 리셋  
-        /// - 리스폰 비활성화 (Update 정지)
-        /// </summary>
-        public void PauseAndClear()
+        private void ClearAll()
         {
-            _isActive = false;
-
+            // 실제 오브젝트 삭제
             for (int i = 0; i < _spawned.Count; i++)
             {
-                if (_spawned[i] != null)
-                    Destroy(_spawned[i].gameObject);
+                Transform t = _spawned[i];
+                if (t != null)
+                {
+                    Destroy(t.gameObject);
+                }
             }
-
-            _spawned.Clear();
-            _respawnTimer = 0f;
-            _timeRampTimer = 0f;
-            _extraFromTimeRamp = 0;
-        }
-
-        /// <summary>
-        /// MineAgain 버튼을 눌러 세션을 다시 시작할 때 호출.  
-        /// - 스패너를 활성화하고  
-        /// - 완전 초기 상태에서 다시 스폰 시작
-        /// </summary>
-        public void StartFresh()
-        {
-            _isActive = true;
-            ResetSpawner();
-        }
-
-        /// <summary>
-        /// 외부에서 "완전 리셋 후 바로 다시 채우기"용으로 쓸 수 있는 함수
-        /// </summary>
-        public void ResetSpawner()
-        {
-            // 1. 모든 기존 광석 삭제
-            for (int i = 0; i < _spawned.Count; i++)
-            {
-                if (_spawned[i] != null)
-                    Destroy(_spawned[i].gameObject);
-            }
-
-            _spawned.Clear();
-
-            // 2. 내부 타이머 리셋
-            _respawnTimer = 0f;
-            _timeRampTimer = 0f;
-            _extraFromTimeRamp = 0;
-
-            // 3. 초기 스폰 다시
-            SpawnInitial();
-        }
-
-        public void ForceClear()
-        {
-            for (int i = 0; i < _spawned.Count; i++)
-            {
-                if (_spawned[i] != null)
-                    DestroyImmediate(_spawned[i].gameObject);
-            }
-
             _spawned.Clear();
         }
 
-        #endregion
-
-        #region 기타 유틸
-
-        private void CleanupDestroyed()
+        private void CleanupNulls()
         {
+            // 리스트에서 누락된 항목 제거
             for (int i = _spawned.Count - 1; i >= 0; i--)
             {
                 if (_spawned[i] == null)
+                {
                     _spawned.RemoveAt(i);
+                }
             }
         }
 
