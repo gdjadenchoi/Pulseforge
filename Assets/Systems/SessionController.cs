@@ -1,7 +1,9 @@
 ﻿﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Pulseforge.UI;
 
 namespace Pulseforge.Systems
 {
@@ -13,26 +15,49 @@ namespace Pulseforge.Systems
 
         [Header("Scene Refs (Optional)")]
         public Transform oreRootOverride;
-        public Behaviour drillCursor;   // DrillCursor 컴포넌트 넣어두면 됨
 
+        [Tooltip("DrillCursor 컴포넌트(Behaviour)")]
+        public Behaviour drillCursor;
+
+        [Header("Intro Flow (Zoom -> Spawn -> StartText -> Cursor+Timer)")]
+        [Min(0f)] [SerializeField] private float introSpawnStableSec = 0.15f;
+        [Min(0.1f)] [SerializeField] private float introMaxWaitSec = 3.0f;
+
+        [Header("Intro Presentation")]
+        [SerializeField] private bool hideCursorOnSceneEnter = true;
+
+        [Tooltip("스폰 끝 -> Start 텍스트 전 텀")]
+        [Min(0f)] [SerializeField] private float delayAfterSpawn = 0.12f;
+
+        [Tooltip("Start 텍스트 연출이 끝난 뒤, 실제 플레이(커서+타이머) 시작 전 텀")]
+        [Min(0f)] [SerializeField] private float delayBeforeGameplay = 0.05f;
+
+        [Header("Start Text Presenter (TMP)")]
+        [SerializeField] private StartTextPresenter startTextPresenter;
+
+        // ✅ Start는 1번만
+        [SerializeField] private string startTextSingle = "Start!";
+
+        // ----- 상태 -----
         public bool IsRunning { get; private set; }
         public float Remaining { get; private set; }
 
+        // remaining, normalized(0~1)
         public event Action OnSessionStart;
         public event Action OnSessionEnd;
-        public event Action<float, float> OnTimeChanged; // (remainingSec, normalized 0~1)
+        public event Action<float, float> OnTimeChanged;
         public event Action<float> OnCritical;
 
         private bool _firedCritical;
-        private OreSpawner _spawner;
         private RewardManager _rewards;
+        private OreSpawner _spawner;
+
+        private Coroutine _beginFlowRoutine;
+        private bool _beginFlowInProgress;
 
         void Awake()
         {
             CacheSceneRefs();
-
-            // 시작 상태에서는 세션이 "미시작"이어야 한다(커서 비활성).
-            ApplyNonRunningStateForScene(SceneManager.GetActiveScene());
         }
 
         void OnEnable()
@@ -47,14 +72,14 @@ namespace Pulseforge.Systems
 
         void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
-            // 씬이 바뀔 때마다(Outpost -> Mining 포함) 레퍼런스 재확보
             CacheSceneRefs();
 
-            // 씬 진입 시점의 기본 상태(세션 미시작)를 확실히 고정한다.
-            ApplyNonRunningStateForScene(scene);
+            if (hideCursorOnSceneEnter)
+                SetCursorVisible(false);
 
-            // 타임스케일은 SessionController가 중앙 관리한다.
-            EnsureTimeScaleForGameplayScene(scene);
+            // Start 텍스트가 혹시 켜져있으면 즉시 숨김
+            if (startTextPresenter != null)
+                startTextPresenter.HideImmediate();
         }
 
         private void CacheSceneRefs()
@@ -67,13 +92,12 @@ namespace Pulseforge.Systems
             _spawner = FindObjectOfType<OreSpawner>();
 #endif
 
-            // drillCursor를 인스펙터에 안 꽂았으면, Mining 씬에서 자동으로 찾아서 채워줌
             if (drillCursor == null)
             {
 #if UNITY_6000_0_OR_NEWER
-                drillCursor = FindFirstObjectByType<DrillCursor>(FindObjectsInactive.Exclude);
+                drillCursor = FindFirstObjectByType<DrillCursor>(FindObjectsInactive.Include);
 #else
-                drillCursor = FindObjectOfType<DrillCursor>();
+                drillCursor = FindObjectOfType<DrillCursor>(true);
 #endif
             }
         }
@@ -85,8 +109,7 @@ namespace Pulseforge.Systems
             Remaining -= Time.deltaTime;
             if (Remaining < 0f) Remaining = 0f;
 
-            float normalized =
-                baseDurationSec <= 0f
+            float normalized = baseDurationSec <= 0f
                 ? 0f
                 : Mathf.Clamp01(Remaining / baseDurationSec);
 
@@ -99,30 +122,35 @@ namespace Pulseforge.Systems
             }
 
             if (Remaining <= 0f)
-            {
                 EndSession();
-            }
         }
 
         // =====================================================================
-        //  세션 오케스트레이션 (줌 완료 후 호출됨)
+        //  Intro Flow
         // =====================================================================
 
-        /// <summary>
-        /// "이번 세션을 새로 시작"하는 표준 진입점.
-        /// - OreSpawner.StartFresh() 호출(월드 정리 + 스폰 + 리스폰 루프)
-        /// - 세션 타이머(StartSession) 시작
-        /// - 커서는 StartSession에서 활성화
-        /// </summary>
         public void BeginSessionFlow()
         {
+            // ✅ 중복 호출 방지
+            if (_beginFlowInProgress) return;
+            _beginFlowInProgress = true;
+
             Debug.Log("[SessionController] BeginSessionFlow()");
 
-            // 세션 시작은 항상 정상 timeScale에서 진행되어야 한다.
-            if (Mathf.Approximately(Time.timeScale, 0f))
-                Time.timeScale = 1f;
+            if (_beginFlowRoutine != null)
+            {
+                StopCoroutine(_beginFlowRoutine);
+                _beginFlowRoutine = null;
+            }
 
-            // 안전장치: Outpost에서 null 잡고 살아남아도, Mining 들어온 뒤 다시 찾게
+            // 세션 정지 + 커서 숨김
+            IsRunning = false;
+            SetCursorVisible(false);
+
+            if (startTextPresenter != null)
+                startTextPresenter.HideImmediate();
+
+            // spawner 재확보
             if (_spawner == null)
             {
 #if UNITY_6000_0_OR_NEWER
@@ -132,20 +160,86 @@ namespace Pulseforge.Systems
 #endif
             }
 
-            // 1) 광석 스패너가 있다면, 새 세션용으로 초기화 + 스폰
-            if (_spawner != null)
+            if (_spawner == null)
             {
-                _spawner.StartFresh();
-            }
-            else
-            {
-                Debug.LogWarning("[SessionController] OreSpawner not found. Cannot begin session.");
+                Debug.LogWarning("[SessionController] OreSpawner not found.");
+                _beginFlowInProgress = false;
                 return;
             }
 
-            // 2) 타이머 + 커서 활성
-            StartSession();
+            // 1) 스폰 시작
+            _spawner.StartFresh();
+
+            // 2) 스폰 안정화 -> 텍스트 1회 -> 커서+타이머 시작
+            _beginFlowRoutine = StartCoroutine(CoIntroThenGameplay());
         }
+
+        private IEnumerator CoIntroThenGameplay()
+        {
+            // --- 스폰 안정화 대기 ---
+            Transform root = _spawner != null ? _spawner.transform : null;
+            if (root != null)
+            {
+                float maxWait = Mathf.Max(0.1f, introMaxWaitSec);
+                float stableNeed = Mathf.Max(0f, introSpawnStableSec);
+
+                float elapsed = 0f;
+
+                // 최소 1개라도 나올 때까지
+                while (root.childCount <= 0 && elapsed < maxWait)
+                {
+                    elapsed += Time.unscaledDeltaTime;
+                    yield return null;
+                }
+
+                // 증가 멈춤 안정화
+                float stable = 0f;
+                int lastCount = root.childCount;
+
+                while (elapsed < maxWait)
+                {
+                    int cur = root.childCount;
+
+                    if (cur != lastCount)
+                    {
+                        lastCount = cur;
+                        stable = 0f;
+                    }
+                    else
+                    {
+                        stable += Time.unscaledDeltaTime;
+                        if (stableNeed <= 0f || stable >= stableNeed)
+                            break;
+                    }
+
+                    elapsed += Time.unscaledDeltaTime;
+                    yield return null;
+                }
+            }
+
+            // --- 스폰 -> 숨고르기 ---
+            if (delayAfterSpawn > 0f)
+                yield return new WaitForSecondsRealtime(delayAfterSpawn);
+
+            // --- Start! (연출 1회) ---
+            if (startTextPresenter != null)
+                yield return StartCoroutine(startTextPresenter.PlayRoutine(startTextSingle));
+
+            // --- 텍스트 끝난 뒤 텀 ---
+            if (delayBeforeGameplay > 0f)
+                yield return new WaitForSecondsRealtime(delayBeforeGameplay);
+
+            // ✅ 여기서부터 실제 플레이 시작: 커서 + 타이머 (동시에)
+            SetCursorVisible(true);
+            StartSession();
+
+            _beginFlowRoutine = null;
+            _beginFlowInProgress = false;
+        }
+
+        // =====================================================================
+        //  Session Timer
+        // =====================================================================
 
         public void StartSession()
         {
@@ -153,8 +247,7 @@ namespace Pulseforge.Systems
             _firedCritical = false;
             IsRunning = true;
 
-            if (drillCursor) drillCursor.enabled = true;
-
+            // ✅ StartTextPresenter는 여기에 절대 연결하지 마(중복 원인)
             OnSessionStart?.Invoke();
         }
 
@@ -162,12 +255,9 @@ namespace Pulseforge.Systems
         {
             if (!IsRunning) return;
 
-            Debug.Log("[SessionController] EndSession() called");
-
             IsRunning = false;
-            if (drillCursor) drillCursor.enabled = false;
+            SetCursorVisible(false);
 
-            // 보상 스냅샷
             IReadOnlyDictionary<RewardType, int> snapshot =
                 _rewards != null ? _rewards.GetAll() : new Dictionary<RewardType, int>();
 
@@ -177,77 +267,50 @@ namespace Pulseforge.Systems
             var popup = FindObjectOfType<Pulseforge.UI.SessionEndPopup>(true);
 #endif
 
-            Debug.Log("[SessionController] popup found? " + (popup != null));
-
-            // 화면 클리어 + 리스폰 정지
             ClearWorld();
 
             if (popup != null)
-            {
                 popup.Show(snapshot, this);
-            }
 
             OnSessionEnd?.Invoke();
+
+            _beginFlowInProgress = false;
         }
 
-        private void ClearWorld()
+        public void RestartSessionFromPopup()
+        {
+            BeginSessionFlow();
+        }
+
+        public void ClearWorld()
         {
             if (_spawner != null)
             {
-                // ✅ OreSpawner의 실제 메서드명은 StopSpawner()
-                _spawner.StopSpawner();
-
-                // oreRootOverride가 있으면 그쪽만 정리
-                Transform root = oreRootOverride != null ? oreRootOverride : _spawner.transform;
-                for (int i = root.childCount - 1; i >= 0; i--)
-                {
-                    Destroy(root.GetChild(i).gameObject);
-                }
+                _spawner.PauseAndClear();
+                return;
             }
+
+            Transform root = oreRootOverride != null ? oreRootOverride : null;
+            if (!root) return;
+
+            for (int i = root.childCount - 1; i >= 0; i--)
+                Destroy(root.GetChild(i).gameObject);
         }
 
         // =====================================================================
-        //  TimeScale / 초기 상태 관리 (중앙집중)
+        //  Cursor visibility (완전 비표시)
         // =====================================================================
 
-        /// <summary>
-        /// 씬 진입 시점에 "세션 미시작" 상태를 강제로 고정한다.
-        /// </summary>
-        private void ApplyNonRunningStateForScene(Scene scene)
+        private void SetCursorVisible(bool visible)
         {
-            if (!IsRunning && drillCursor)
-                drillCursor.enabled = false;
-        }
+            if (drillCursor == null) return;
 
-        /// <summary>
-        /// PF_Mining에서는 timeScale==0이면 줌/스폰/타이머가 모두 멈춰 보일 수 있으므로
-        /// 씬 진입 시점에 기본값(1)으로 복구한다.
-        /// </summary>
-        private void EnsureTimeScaleForGameplayScene(Scene scene)
-        {
-            if (scene.name == "PF_Mining")
-            {
-                if (Mathf.Approximately(Time.timeScale, 0f))
-                    Time.timeScale = 1f;
-            }
-        }
+            GameObject go = drillCursor.gameObject;
 
-        /// <summary>
-        /// 외부에서 일시정지가 필요할 때는 여기로만 들어오도록 한다(정책).
-        /// </summary>
-        public void SetPaused(bool paused)
-        {
-            Time.timeScale = paused ? 0f : 1f;
-        }
+            if (go.activeSelf != visible)
+                go.SetActive(visible);
 
-        public void RestartSession()
-        {
-            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
-        }
-
-        public void GoToUpgrade()
-        {
-            Debug.Log("[SessionController] GoToUpgrade() — 추후 씬 전환 연결 예정");
+            drillCursor.enabled = visible;
         }
     }
 }
