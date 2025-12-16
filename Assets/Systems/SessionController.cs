@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -15,34 +15,67 @@ namespace Pulseforge.Systems
         public Transform oreRootOverride;
         public Behaviour drillCursor;   // DrillCursor 컴포넌트 넣어두면 됨
 
-        // ----- 상태 & 프로퍼티 -----
         public bool IsRunning { get; private set; }
         public float Remaining { get; private set; }
 
-        // remaining, normalized(0~1)
         public event Action OnSessionStart;
         public event Action OnSessionEnd;
-        public event Action<float, float> OnTimeChanged;
-        public event Action<float> OnCritical;   // 크리티컬 순간 한 번 호출
+        public event Action<float, float> OnTimeChanged; // (remainingSec, normalized 0~1)
+        public event Action<float> OnCritical;
 
-        bool _firedCritical;
-        RewardManager _rewards;
-        OreSpawner _spawner;
+        private bool _firedCritical;
+        private OreSpawner _spawner;
+        private RewardManager _rewards;
 
         void Awake()
         {
+            CacheSceneRefs();
+
+            // 시작 상태에서는 세션이 "미시작"이어야 한다(커서 비활성).
+            ApplyNonRunningStateForScene(SceneManager.GetActiveScene());
+        }
+
+        void OnEnable()
+        {
+            SceneManager.sceneLoaded += OnSceneLoaded;
+        }
+
+        void OnDisable()
+        {
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+        }
+
+        void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            // 씬이 바뀔 때마다(Outpost -> Mining 포함) 레퍼런스 재확보
+            CacheSceneRefs();
+
+            // 씬 진입 시점의 기본 상태(세션 미시작)를 확실히 고정한다.
+            ApplyNonRunningStateForScene(scene);
+
+            // 타임스케일은 SessionController가 중앙 관리한다.
+            EnsureTimeScaleForGameplayScene(scene);
+        }
+
+        private void CacheSceneRefs()
+        {
             _rewards = RewardManager.Instance;
+
 #if UNITY_6000_0_OR_NEWER
             _spawner = FindFirstObjectByType<OreSpawner>(FindObjectsInactive.Exclude);
 #else
             _spawner = FindObjectOfType<OreSpawner>();
 #endif
-        }
 
-        void Start()
-        {
-            // 처음 씬에 들어왔을 때 바로 세션 시작
-            StartSession();
+            // drillCursor를 인스펙터에 안 꽂았으면, Mining 씬에서 자동으로 찾아서 채워줌
+            if (drillCursor == null)
+            {
+#if UNITY_6000_0_OR_NEWER
+                drillCursor = FindFirstObjectByType<DrillCursor>(FindObjectsInactive.Exclude);
+#else
+                drillCursor = FindObjectOfType<DrillCursor>();
+#endif
+            }
         }
 
         void Update()
@@ -52,7 +85,8 @@ namespace Pulseforge.Systems
             Remaining -= Time.deltaTime;
             if (Remaining < 0f) Remaining = 0f;
 
-            float normalized = baseDurationSec <= 0f
+            float normalized =
+                baseDurationSec <= 0f
                 ? 0f
                 : Mathf.Clamp01(Remaining / baseDurationSec);
 
@@ -70,7 +104,48 @@ namespace Pulseforge.Systems
             }
         }
 
-        // ----- 세션 제어 -----
+        // =====================================================================
+        //  세션 오케스트레이션 (줌 완료 후 호출됨)
+        // =====================================================================
+
+        /// <summary>
+        /// "이번 세션을 새로 시작"하는 표준 진입점.
+        /// - OreSpawner.StartFresh() 호출(월드 정리 + 스폰 + 리스폰 루프)
+        /// - 세션 타이머(StartSession) 시작
+        /// - 커서는 StartSession에서 활성화
+        /// </summary>
+        public void BeginSessionFlow()
+        {
+            Debug.Log("[SessionController] BeginSessionFlow()");
+
+            // 세션 시작은 항상 정상 timeScale에서 진행되어야 한다.
+            if (Mathf.Approximately(Time.timeScale, 0f))
+                Time.timeScale = 1f;
+
+            // 안전장치: Outpost에서 null 잡고 살아남아도, Mining 들어온 뒤 다시 찾게
+            if (_spawner == null)
+            {
+#if UNITY_6000_0_OR_NEWER
+                _spawner = FindFirstObjectByType<OreSpawner>(FindObjectsInactive.Exclude);
+#else
+                _spawner = FindObjectOfType<OreSpawner>();
+#endif
+            }
+
+            // 1) 광석 스패너가 있다면, 새 세션용으로 초기화 + 스폰
+            if (_spawner != null)
+            {
+                _spawner.StartFresh();
+            }
+            else
+            {
+                Debug.LogWarning("[SessionController] OreSpawner not found. Cannot begin session.");
+                return;
+            }
+
+            // 2) 타이머 + 커서 활성
+            StartSession();
+        }
 
         public void StartSession()
         {
@@ -104,71 +179,72 @@ namespace Pulseforge.Systems
 
             Debug.Log("[SessionController] popup found? " + (popup != null));
 
-            // *** 여기서는 "화면 클리어 + 리스폰 정지" 까지만 ***
+            // 화면 클리어 + 리스폰 정지
             ClearWorld();
 
             if (popup != null)
             {
-                // 팝업은 클리어된 화면 위에만 뜨고,
-                // MineAgain 버튼을 눌러야만 다시 스폰이 시작되도록 controller를 넘긴다.
                 popup.Show(snapshot, this);
             }
 
             OnSessionEnd?.Invoke();
         }
 
+        private void ClearWorld()
+        {
+            if (_spawner != null)
+            {
+                // ✅ OreSpawner의 실제 메서드명은 StopSpawner()
+                _spawner.StopSpawner();
+
+                // oreRootOverride가 있으면 그쪽만 정리
+                Transform root = oreRootOverride != null ? oreRootOverride : _spawner.transform;
+                for (int i = root.childCount - 1; i >= 0; i--)
+                {
+                    Destroy(root.GetChild(i).gameObject);
+                }
+            }
+        }
+
+        // =====================================================================
+        //  TimeScale / 초기 상태 관리 (중앙집중)
+        // =====================================================================
+
         /// <summary>
-        /// MineAgain 버튼에서 호출할 재시작 전용 함수.
-        /// 순서: 팝업에서 이 함수 호출 → OreSpawner.StartFresh() → 세션 타이머 StartSession()
+        /// 씬 진입 시점에 "세션 미시작" 상태를 강제로 고정한다.
         /// </summary>
-        public void RestartSessionFromPopup()
+        private void ApplyNonRunningStateForScene(Scene scene)
         {
-            Debug.Log("[SessionController] RestartSessionFromPopup() called");
-
-            // 1) 광석 스패너를 다시 활성화 + 초기 스폰
-            if (_spawner != null)
-            {
-                _spawner.StartFresh();
-            }
-            else
-            {
-                // 혹시라도 스패너를 못 찾는 상황이면 최소한 기존 월드는 정리
-                ClearWorld();
-            }
-
-            // 2) 세션 타이머 재시작
-            StartSession();
+            if (!IsRunning && drillCursor)
+                drillCursor.enabled = false;
         }
 
-        // Ore 정리 (OreSpawner와 연동되도록 우선 사용)
-        public void ClearWorld()
+        /// <summary>
+        /// PF_Mining에서는 timeScale==0이면 줌/스폰/타이머가 모두 멈춰 보일 수 있으므로
+        /// 씬 진입 시점에 기본값(1)으로 복구한다.
+        /// </summary>
+        private void EnsureTimeScaleForGameplayScene(Scene scene)
         {
-            // 스패너가 있으면 스패너에게 "멈추고, 다 지우고, 리스폰도 멈춰" 라고만 시킨다.
-            if (_spawner != null)
+            if (scene.name == "PF_Mining")
             {
-                _spawner.PauseAndClear();
-                return;
-            }
-
-            // 예외적으로 oreRootOverride만 사용해야 하는 경우를 대비한 폴백
-            Transform root =
-                oreRootOverride != null ? oreRootOverride : null;
-
-            if (!root) return;
-
-            for (int i = root.childCount - 1; i >= 0; i--)
-            {
-                Destroy(root.GetChild(i).gameObject);
+                if (Mathf.Approximately(Time.timeScale, 0f))
+                    Time.timeScale = 1f;
             }
         }
 
-        // 씬 전체 리스타트용(지금은 안 써도 됨, 남겨둠)
+        /// <summary>
+        /// 외부에서 일시정지가 필요할 때는 여기로만 들어오도록 한다(정책).
+        /// </summary>
+        public void SetPaused(bool paused)
+        {
+            Time.timeScale = paused ? 0f : 1f;
+        }
+
         public void RestartSession()
         {
             SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
         }
 
-        // 업그레이드 씬 전환용(나중에 연결 예정)
         public void GoToUpgrade()
         {
             Debug.Log("[SessionController] GoToUpgrade() — 추후 씬 전환 연결 예정");

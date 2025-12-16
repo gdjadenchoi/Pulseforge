@@ -343,12 +343,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   levelText: {fileID: 7360718865970197448}
-  expFill: {fileID: 8983163157011236229}
   expText: {fileID: 0}
-  levelManager: {fileID: 0}
+  expFill: {fileID: 8983163157011236229}
+  disableIfNoManager: 1
   levelFormat: Lv. {level}
   expFormat: '{current} / {required}'
-  disableIfNoManager: 1
 --- !u!1 &3967341393005891683
 GameObject:
   m_ObjectHideFlags: 0

@@ -45,17 +45,18 @@ public class ResourceHUD : MonoBehaviour
         if (!resourceText)
             resourceText = GetComponentInChildren<TMP_Text>();
 
-        if (!rewardManager)
-            rewardManager = FindAnyObjectByType<RewardManager>(FindObjectsInactive.Include);
+        // 🔧 기존: FindAnyObjectByType 로 검색
+        // → 수정: 싱글톤(SafeInstance / Instance)에서 직접 가져오기
+        EnsureRewardManagerReference();
     }
 
     private void OnEnable()
     {
+        // 혹시 씬 전환 중에 참조가 끊겼을 수 있으니 한 번 더 시도
+        EnsureRewardManagerReference();
+
         // 폴링 루프 시작
         refreshRoutine = StartCoroutine(RefreshLoop());
-
-        // 나중에 이벤트 기반으로 바꾸고 싶다면,
-        // RewardManager.OnChanged 등에 리스너를 붙여서 바로 RefreshImmediate()를 호출할 수도 있음.
     }
 
     private void OnDisable()
@@ -76,7 +77,11 @@ public class ResourceHUD : MonoBehaviour
 
     private void RefreshImmediate()
     {
-        if (!resourceText || !rewardManager)
+        if (!resourceText)
+            return;
+
+        // 매 프레임은 아니지만, 갱신 시점마다 RewardManager를 한 번 더 확인
+        if (!EnsureRewardManagerReference())
             return;
 
         if (showAllTypes)
@@ -101,11 +106,27 @@ public class ResourceHUD : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// RewardManager 싱글톤에서 참조를 확보한다.
+    /// - 이미 있으면 그대로 사용
+    /// - 없으면 SafeInstance → Instance 순으로 시도
+    /// </summary>
+    private bool EnsureRewardManagerReference()
+    {
+        if (rewardManager != null)
+            return true;
+
+        // SafeInstance 가 있으면 우선 사용, 없으면 Instance 시도
+        rewardManager = RewardManager.SafeInstance ?? RewardManager.Instance;
+
+        return rewardManager != null;
+    }
+
     private int SafeGet(RewardType rt)
     {
         try
         {
-            return rewardManager.Get(rt);
+            return rewardManager != null ? rewardManager.Get(rt) : 0;
         }
         catch
         {

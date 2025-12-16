@@ -1,357 +1,484 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 namespace Pulseforge.Systems
 {
+    /// <summary>
+    /// 광석 스폰/리스폰 담당
+    /// - ScaleLevel에 따라 Spawn World Height(=스폰 영역 높이)를 사용
+    /// - Spawn World Height + FixedAspect + SafePercent로 Rect 스폰영역 계산
+    ///
+    /// 핵심 변경:
+    /// 1) SpawnWorldHeight는 MiningScaleManager.GetFinalSpawnWorldHeight()를 "우선" 사용(단일 소스)
+    /// 2) 현재 계산된 스폰 Rect를 외부에서 조회할 수 있도록 공개 API 제공
+    /// </summary>
     public class OreSpawner : MonoBehaviour
     {
-        private const string UpgradeIdOreAmount = "OreAmount";
+        [Header("Prefab")]
+        [SerializeField] private GameObject orePrefab;
 
-        [Header("Spawn Settings")]
-        [Tooltip("생성할 광석 프리팹")]
-        public GameObject orePrefab;
+        [Header("Spawn Flow")]
+        [SerializeField] private bool autoSpawnOnAwake = false;
 
-        [Tooltip("게임 시작 시 기본 생성 개수")]
-        public int initialCount = 12;
+        [Tooltip("세션 시작 시 즉시 깔리는 수(연출 포함). 보통 TargetCount 이상으로 깔고 싶으면 SessionController에서 조절")]
+        [SerializeField] private int initialCount = 12;
 
-        [Tooltip("Rect 영역을 쓰지 않을 때 사용하는 원형 반경 (레거시용)")]
-        public float radius = 5f;
+        [Tooltip("유지하려는 기본 목표 수")]
+        [SerializeField] private int baseTargetCount = 12;
 
-        [Header("Rect Spawn Area (New)")]
-        [Tooltip("Rect 영역 기반 스폰을 사용할지 여부")]
-        public bool useRectArea = true;
+        [SerializeField] private bool respawnToTargetCount = true;
+        [SerializeField] private float respawnInterval = 0.3f;
+        [SerializeField] private int batchMax = 3;
 
-        [Tooltip("스폰 영역의 크기 (폭, 높이)")]
-        public Vector2 areaSize = new Vector2(10f, 6f);
+        [Header("Target Count: Upgrade (optional)")]
+        [SerializeField] private bool useUpgradeOreAmount = true;
+        [SerializeField] private string upgradeIdOreAmount = "OreAmount";
+        [SerializeField] private int amountPerUpgradeLevel = 5;
 
-        [Tooltip("스폰 영역의 중심 오프셋 (Spawner 기준)")]
-        public Vector2 areaOffset = Vector2.zero;
+        [Header("Target Count: ScaleLevel (optional)")]
+        [SerializeField] private bool addByScaleLevel = false;
+        [SerializeField] private int extraPerScaleLevel = 4;
 
-        [Header("Grid Settings")]
-        [Tooltip("그리드 스냅을 사용할지 여부")]
-        public bool useGrid = true;
+        [Header("Spawn Area Mode")]
+        [Tooltip("true면 Rect 기반 스폰(추천). false면 카메라 뷰포트 기준 스폰")]
+        [SerializeField] private bool useRectArea = true;
 
-        [Tooltip("그리드 셀 간격 (월드 단위)")]
-        public float gridSize = 0.5f;
+        [Tooltip("Rect 중심 오프셋(월드)")]
+        [SerializeField] private Vector2 areaOffset = Vector2.zero;
 
-        [Header("Spawn Distance Rules")]
-        [Tooltip("광석 간 최소 거리")]
-        public float minDistance = 0.5f;
+        [Header("Fixed Gameplay Aspect / Safe Area")]
+        [Tooltip("9:16 = 0.5625 (세로 고정 플레이 가정)")]
+        [SerializeField] private float fixedAspect = 0.5625f;
 
-        [Tooltip("너무 많이 실패했을 때, 강제로 배치 시도하는 최대 횟수")]
-        public int maxAttemptsPerSpawn = 32;
+        [Tooltip("상단 UI 고려 여유(비율)")]
+        [Range(0f, 0.4f)]
+        [SerializeField] private float topSafePercent = 0.10f;
 
-        [Header("Respawn Settings")]
-        [Tooltip("광석 개수를 유지하려는 목표 수(초기값은 initialCount와 동일하게 두어도 됨)")]
-        public int baseTargetCount = 12;
+        [Tooltip("하단 UI 고려 여유(비율)")]
+        [Range(0f, 0.4f)]
+        [SerializeField] private float bottomSafePercent = 0.10f;
 
-        [Tooltip("리스폰 체크 주기(초)")]
-        public float respawnInterval = 0.3f;
+        [Header("SpawnWorldHeight Source")]
+        [Tooltip("true면 SpawnWorldHeight는 MiningScaleManager.GetFinalSpawnWorldHeight()를 우선 사용(단일 소스). false면 아래 viewHeightTiers 사용")]
+        [SerializeField] private bool preferMiningScaleManagerHeight = true;
 
-        [Tooltip("한 번에 리스폰할 수 있는 최대 수")]
-        public int batchMax = 3;
-
-        [Header("Time Ramp Settings")]
-        [Tooltip("시간 경과에 따라 목표 광석 수를 늘릴지 여부")]
-        public bool useTimeRamp = false;
-
-        [Tooltip("광석 수가 증가하기까지 걸리는 시간(초)")]
-        public float timeRampInterval = 10f;
-
-        [Tooltip("증가하는 광석 수(한 단계마다 추가)")]
-        public int addAmount = 5;
-
-        [Tooltip("추가되는 광석 수의 최대치(0 이하면 무제한)")]
-        public int maxExtraFromTimeRamp = 0;
-
-        // 내부 관리용 리스트
-        private readonly List<Transform> _spawned = new List<Transform>();
-
-        // 리스폰/타임램프용 타이머
-        private float _respawnTimer;
-        private float _timeRampTimer;
-        private int _extraFromTimeRamp;
-
-        // 세션 중 활성 여부 (세션 끝나면 false, 다시 시작하면 true)
-        private bool _isActive = true;
-
-        /// <summary>
-        /// 현재 세션에서 유지하려는 목표 광석 수.
-        /// - baseTargetCount + 시간 램프 증가분 + 업그레이드 보너스를 모두 포함.
-        /// </summary>
-        private int TargetCount
+        [Header("View Height Tier Table (Fallback)")]
+        [SerializeField] private List<ViewHeightTier> viewHeightTiers = new List<ViewHeightTier>()
         {
-            get
-            {
-                int extra = 0;
-                var upgrade = UpgradeManager.Instance;
-                if (upgrade != null)
-                {
-                    // 예전 GetOreAmountBonus()와 동일한 로직:
-                    // level * 5
-                    int level = upgrade.GetLevel(UpgradeIdOreAmount);
-                    const int amountPerLevel = 5;
-                    extra = level * amountPerLevel;
-                }
+            new ViewHeightTier(){ scaleLevel = 0, spawnWorldHeight = 10f },
+            new ViewHeightTier(){ scaleLevel = 1, spawnWorldHeight = 13f },
+            new ViewHeightTier(){ scaleLevel = 2, spawnWorldHeight = 16f },
+        };
 
-                return baseTargetCount + extra;
-            }
+        [Serializable]
+        public struct ViewHeightTier
+        {
+            public int scaleLevel;
+            public float spawnWorldHeight;
         }
 
-        #region Unity Lifecycle
+        [Header("Spawn Distribution")]
+        [SerializeField] private bool useClusterDistribution = true;
+        [SerializeField] private int clusterCount = 4;
+        [SerializeField] private Vector2 clusterRadiusRange = new Vector2(1f, 2f);
+        [Range(0f, 1f)]
+        [SerializeField] private float clusterSpawnChance = 0.7f;
+
+        [Header("Distance / Attempts")]
+        [SerializeField] private float minDistance = 0.6f;
+        [SerializeField] private int maxAttemptsPerSpawn = 32;
+
+        // Runtime
+        private readonly List<GameObject> _spawned = new List<GameObject>();
+        private Coroutine _respawnRoutine;
+        private bool _isActive;
+
+        // Cluster cache
+        private bool _clustersInitialized;
+        private readonly List<Cluster> _clusters = new List<Cluster>();
+
+        private MiningScaleManager _scaleManager;
+        private int _lastScaleLevel = int.MinValue;
+
+        private struct Cluster
+        {
+            public Vector2 center;
+            public float radius;
+        }
 
         private void Awake()
         {
-            // 초기 리스트 클리어 (혹시 에디터 상에 남아 있을 수 있으므로)
-            _spawned.Clear();
-
-            // baseTargetCount를 초기값 기준으로 자동 세팅해두기
-            if (baseTargetCount < initialCount)
-            {
-                baseTargetCount = initialCount;
-            }
-
-            // 초기 스폰
-            SpawnInitial();
+            _scaleManager = MiningScaleManager.Instance;
+            if (_scaleManager != null)
+                _lastScaleLevel = _scaleManager.CurrentScaleLevel;
         }
 
-        private void Update()
+        private void Start()
         {
-            if (!_isActive)
-                return;
+            if (autoSpawnOnAwake)
+                StartFresh();
+        }
 
-            // 리스폰 타이머
-            _respawnTimer += Time.deltaTime;
-            if (_respawnTimer >= respawnInterval)
-            {
-                _respawnTimer -= respawnInterval;
-                HandleRespawn();
-            }
+        private void OnEnable()
+        {
+            if (_scaleManager == null) _scaleManager = MiningScaleManager.Instance;
 
-            // 시간 경과에 따른 목표 수 증가
-            if (useTimeRamp)
+            if (_scaleManager != null)
             {
-                _timeRampTimer += Time.deltaTime;
-                if (_timeRampTimer >= timeRampInterval)
-                {
-                    _timeRampTimer -= timeRampInterval;
-                    IncreaseTargetFromTimeRamp();
-                }
+                _scaleManager.OnScaleChanged -= HandleScaleChanged;
+                _scaleManager.OnScaleChanged += HandleScaleChanged;
             }
         }
 
-        #endregion
-
-        #region Public API (SessionController 등에서 사용)
+        private void OnDisable()
+        {
+            if (_scaleManager != null)
+                _scaleManager.OnScaleChanged -= HandleScaleChanged;
+        }
 
         /// <summary>
-        /// 세션이 끝날 때 호출: 리스폰 정지 + 기존 광석 삭제
+        /// SessionController 호환용: 스폰 중지 + 월드 정리
         /// </summary>
         public void PauseAndClear()
         {
+            StopSpawner();
+            ClearWorld();
+        }
+
+        public void StartFresh()
+        {
+            ClearWorld();
+            InvalidateClusters();
+            EnsureClusters();
+
+            int target = GetTargetCount();
+            int initialSpawnCount = Mathf.Max(initialCount, target);
+
+            SpawnInitial(initialSpawnCount);
+
+            _isActive = true;
+
+            if (_respawnRoutine != null) StopCoroutine(_respawnRoutine);
+            _respawnRoutine = StartCoroutine(RespawnLoop());
+        }
+
+        public void StopSpawner()
+        {
             _isActive = false;
-            ClearAll();
+            if (_respawnRoutine != null) StopCoroutine(_respawnRoutine);
+            _respawnRoutine = null;
         }
 
         /// <summary>
-        /// 세션 재시작 시 호출: 내부 상태 리셋 + 초기 스폰 다시 수행
+        /// 인트로 연출용(1개만 깔기 등)
         /// </summary>
-        public void StartFresh()
+        public void SpawnPreview(int count = 1)
         {
-            _isActive = true;
-
-            // 타이머 및 시간 램프 누적치 초기화
-            _respawnTimer = 0f;
-            _timeRampTimer = 0f;
-            _extraFromTimeRamp = 0;
-
-            ClearAll();
-            SpawnInitial();
+            ClearWorld();
+            InvalidateClusters();
+            EnsureClusters();
+            SpawnInitial(Mathf.Max(0, count));
         }
 
-        #endregion
-
-        #region Spawn Core
-
-        private void SpawnInitial()
+        private IEnumerator RespawnLoop()
         {
-            if (orePrefab == null)
+            while (_isActive)
             {
-                Debug.LogWarning("[OreSpawner] orePrefab이 설정되어 있지 않습니다.");
-                return;
-            }
-
-            int toSpawn = Mathf.Max(0, initialCount);
-            for (int i = 0; i < toSpawn; i++)
-            {
-                TrySpawnOne();
+                HandleRespawn();
+                yield return new WaitForSeconds(respawnInterval);
             }
         }
 
         private void HandleRespawn()
         {
-            // 현재 살아있는(존재하는) 광석 수
+            if (!respawnToTargetCount) return;
+
             CleanupNulls();
+            SyncScaleLevelChangeIfNeeded();
+
             int current = _spawned.Count;
+            int target = GetTargetCount();
 
-            int target = TargetCount;
-            if (current >= target)
-                return;
+            if (current >= target) return;
 
-            int needed = target - current;
-
-            // 한 번에 1 ~ batchMax 개,
-            int batch = Mathf.Min(needed, batchMax);
-            for (int i = 0; i < batch; i++)
-            {
+            int need = Mathf.Min(batchMax, target - current);
+            for (int i = 0; i < need; i++)
                 TrySpawnOne();
-            }
         }
 
-        private void IncreaseTargetFromTimeRamp()
+        private int GetTargetCount()
         {
-            // maxExtraFromTimeRamp 가 0 이하이면 무제한으로 증가
-            if (maxExtraFromTimeRamp > 0 &&
-                _extraFromTimeRamp >= maxExtraFromTimeRamp)
-                return;
+            int total = baseTargetCount;
 
-            _extraFromTimeRamp += addAmount;
+            if (useUpgradeOreAmount)
+            {
+                var up = UpgradeManager.Instance;
+                if (up != null)
+                {
+                    int lv = up.GetLevel(upgradeIdOreAmount);
+                    total += lv * amountPerUpgradeLevel;
+                }
+            }
+
+            if (addByScaleLevel && extraPerScaleLevel > 0)
+            {
+                var sm = MiningScaleManager.Instance;
+                if (sm != null)
+                    total += Mathf.Max(0, sm.CurrentScaleLevel) * extraPerScaleLevel;
+            }
+
+            return Mathf.Max(0, total);
+        }
+
+        private void SpawnInitial(int count)
+        {
+            if (orePrefab == null) return;
+
+            for (int i = 0; i < count; i++)
+                TrySpawnOne();
         }
 
         private void TrySpawnOne()
         {
-            if (orePrefab == null)
+            if (orePrefab == null) return;
+
+            if (!TryGetSpawnRect(out Vector3 center, out Vector2 halfSize))
                 return;
 
-            Vector3 position;
-            bool success = FindValidPosition(out position);
-
-            if (!success)
-            {
-                // 실패 시에는 그냥 포기 (너무 좁거나 조건이 빡셀 수 있음)
-                // 필요하다면 여기서 로그를 찍어도 됨
+            if (!TryFindSpawnPosition(center, halfSize, out Vector3 spawnPos))
                 return;
-            }
 
-            GameObject oreObj = Instantiate(orePrefab, position, Quaternion.identity, transform);
-            _spawned.Add(oreObj.transform);
+            var go = Instantiate(orePrefab, spawnPos, Quaternion.identity, transform);
+            _spawned.Add(go);
         }
 
-        #endregion
-
-        #region Positioning / Validation
-
-        private bool FindValidPosition(out Vector3 result)
+        private bool TryFindSpawnPosition(Vector3 center, Vector2 halfSize, out Vector3 pos)
         {
-            result = Vector3.zero;
+            float minDistSqr = minDistance * minDistance;
 
-            // 스폰 영역 기준 중심
-            Vector3 center = transform.position;
-            if (useRectArea)
-            {
-                center += (Vector3)areaOffset;
-            }
-
-            // 여러 번 시도해서, 기존 광석과의 최소 거리 조건을 만족하는 위치를 찾는다.
             for (int attempt = 0; attempt < maxAttemptsPerSpawn; attempt++)
             {
-                Vector3 candidate;
+                Vector2 p2 = SampleDistributionPoint(center, halfSize);
+                Vector3 candidate = new Vector3(p2.x, p2.y, 0f);
 
-                if (useRectArea)
+                bool ok = true;
+                for (int i = 0; i < _spawned.Count; i++)
                 {
-                    // Rect 영역 내부의 랜덤 위치
-                    float halfX = areaSize.x * 0.5f;
-                    float halfY = areaSize.y * 0.5f;
-                    float x = Random.Range(-halfX, halfX);
-                    float y = Random.Range(-halfY, halfY);
-                    candidate = center + new Vector3(x, y, 0f);
-                }
-                else
-                {
-                    // 원형 반경 내 랜덤 위치 (레거시)
-                    Vector2 rand = Random.insideUnitCircle * radius;
-                    candidate = center + (Vector3)rand;
+                    var go = _spawned[i];
+                    if (go == null) continue;
+                    float d = (go.transform.position - candidate).sqrMagnitude;
+                    if (d < minDistSqr) { ok = false; break; }
                 }
 
-                // 그리드 스냅 적용
-                if (useGrid && gridSize > 0f)
+                if (ok)
                 {
-                    candidate.x = Mathf.Round(candidate.x / gridSize) * gridSize;
-                    candidate.y = Mathf.Round(candidate.y / gridSize) * gridSize;
-                }
-
-                // 기존 광석들과의 최소 거리 체크
-                if (!IsTooClose(candidate))
-                {
-                    result = candidate;
+                    pos = candidate;
                     return true;
                 }
             }
 
+            pos = center;
             return false;
         }
 
-        private bool IsTooClose(Vector3 candidate)
+        private Vector2 SampleDistributionPoint(Vector3 center3, Vector2 halfSize)
         {
-            float minSqr = minDistance * minDistance;
-            for (int i = 0; i < _spawned.Count; i++)
-            {
-                Transform t = _spawned[i];
-                if (t == null)
-                    continue;
+            Vector2 center = new Vector2(center3.x, center3.y);
 
-                float sqr = (t.position - candidate).sqrMagnitude;
-                if (sqr < minSqr)
-                    return true;
+            if (!useClusterDistribution || _clusters.Count == 0)
+            {
+                return new Vector2(
+                    UnityEngine.Random.Range(center.x - halfSize.x, center.x + halfSize.x),
+                    UnityEngine.Random.Range(center.y - halfSize.y, center.y + halfSize.y)
+                );
             }
-            return false;
+
+            bool useCluster = UnityEngine.Random.value <= clusterSpawnChance;
+            if (useCluster)
+            {
+                int idx = UnityEngine.Random.Range(0, _clusters.Count);
+                var c = _clusters[idx];
+
+                Vector2 offset = UnityEngine.Random.insideUnitCircle * c.radius;
+                Vector2 p = c.center + offset;
+
+                p.x = Mathf.Clamp(p.x, center.x - halfSize.x, center.x + halfSize.x);
+                p.y = Mathf.Clamp(p.y, center.y - halfSize.y, center.y + halfSize.y);
+                return p;
+            }
+
+            return new Vector2(
+                UnityEngine.Random.Range(center.x - halfSize.x, center.x + halfSize.x),
+                UnityEngine.Random.Range(center.y - halfSize.y, center.y + halfSize.y)
+            );
         }
 
-        #endregion
-
-        #region Maintenance Helpers
-
-        private void ClearAll()
+        private void EnsureClusters()
         {
-            // 실제 오브젝트 삭제
-            for (int i = 0; i < _spawned.Count; i++)
+            if (_clustersInitialized) return;
+
+            _clustersInitialized = true;
+            _clusters.Clear();
+
+            if (!TryGetSpawnRect(out Vector3 center3, out Vector2 halfSize))
+                return;
+
+            Vector2 center = new Vector2(center3.x, center3.y);
+
+            for (int i = 0; i < clusterCount; i++)
             {
-                Transform t = _spawned[i];
-                if (t != null)
+                Vector2 c = new Vector2(
+                    UnityEngine.Random.Range(center.x - halfSize.x, center.x + halfSize.x),
+                    UnityEngine.Random.Range(center.y - halfSize.y, center.y + halfSize.y)
+                );
+
+                float r = UnityEngine.Random.Range(clusterRadiusRange.x, clusterRadiusRange.y);
+                _clusters.Add(new Cluster { center = c, radius = r });
+            }
+        }
+
+        private void InvalidateClusters()
+        {
+            _clustersInitialized = false;
+        }
+
+        private void HandleScaleChanged(int newLevel)
+        {
+            _lastScaleLevel = newLevel;
+            InvalidateClusters();
+            EnsureClusters();
+        }
+
+        private void SyncScaleLevelChangeIfNeeded()
+        {
+            var sm = MiningScaleManager.Instance;
+            if (sm == null) return;
+
+            int cur = sm.CurrentScaleLevel;
+            if (cur == _lastScaleLevel) return;
+
+            _lastScaleLevel = cur;
+            InvalidateClusters();
+            EnsureClusters();
+        }
+
+        // --- 단일 소스: SpawnWorldHeight 산출 ---
+        private float GetFinalSpawnWorldHeight(int scaleLevel)
+        {
+            if (preferMiningScaleManagerHeight)
+            {
+                var msm = MiningScaleManager.Instance;
+                if (msm != null)
                 {
-                    Destroy(t.gameObject);
+                    // MiningScaleManager가 제공하는 단일 소스
+                    float h = msm.GetFinalSpawnWorldHeight();
+                    if (h > 0.1f) return h;
                 }
             }
-            _spawned.Clear();
+
+            // fallback: 로컬 테이블
+            return GetSpawnWorldHeightByScaleLevel(scaleLevel);
+        }
+
+        private float GetSpawnWorldHeightByScaleLevel(int scaleLevel)
+        {
+            if (viewHeightTiers == null || viewHeightTiers.Count == 0)
+                return 10f;
+
+            float chosen = viewHeightTiers[0].spawnWorldHeight;
+            int chosenLevel = int.MinValue;
+
+            for (int i = 0; i < viewHeightTiers.Count; i++)
+            {
+                var t = viewHeightTiers[i];
+                if (t.scaleLevel <= scaleLevel && t.scaleLevel > chosenLevel)
+                {
+                    chosenLevel = t.scaleLevel;
+                    chosen = t.spawnWorldHeight;
+                }
+            }
+
+            return Mathf.Max(1f, chosen);
+        }
+
+        /// <summary>
+        /// 외부(카메라/디버그)에서 "현재 스폰 영역"을 알고 싶을 때 사용.
+        /// </summary>
+        public bool TryGetCurrentSpawnRect(out Vector3 center, out Vector2 halfSize)
+        {
+            return TryGetSpawnRect(out center, out halfSize);
+        }
+
+        private bool TryGetSpawnRect(out Vector3 center, out Vector2 halfSize)
+        {
+            // Rect 기반(권장): “줌아웃 = 스폰영역 확장”을 보장
+            if (useRectArea)
+            {
+                int level = 0;
+                var sm = MiningScaleManager.Instance;
+                if (sm != null) level = sm.CurrentScaleLevel;
+
+                float worldHeight = GetFinalSpawnWorldHeight(level);
+
+                // 상/하 Safe Percent 적용 (UI 고려)
+                float safeMul = Mathf.Clamp01(1f - topSafePercent - bottomSafePercent);
+                if (safeMul <= 0.0001f) safeMul = 0.0001f;
+
+                float usableHeight = worldHeight * safeMul;
+                float usableWidth = usableHeight * fixedAspect;
+
+                center = new Vector3(areaOffset.x, areaOffset.y, 0f);
+                halfSize = new Vector2(usableWidth * 0.5f, usableHeight * 0.5f);
+                return true;
+            }
+
+            // 카메라 기반(예비)
+            if (Camera.main != null)
+            {
+                var cam = Camera.main;
+                float z = -cam.transform.position.z;
+
+                Vector3 min = cam.ViewportToWorldPoint(new Vector3(0f, 0f, z));
+                Vector3 max = cam.ViewportToWorldPoint(new Vector3(1f, 1f, z));
+
+                center = (min + max) * 0.5f;
+                halfSize = new Vector2(Mathf.Abs(max.x - min.x) * 0.5f, Mathf.Abs(max.y - min.y) * 0.5f);
+                return true;
+            }
+
+            center = Vector3.zero;
+            halfSize = new Vector2(3f, 5f);
+            return true;
         }
 
         private void CleanupNulls()
         {
-            // 리스트에서 누락된 항목 제거
             for (int i = _spawned.Count - 1; i >= 0; i--)
             {
                 if (_spawned[i] == null)
-                {
                     _spawned.RemoveAt(i);
-                }
             }
+        }
+
+        private void ClearWorld()
+        {
+            for (int i = _spawned.Count - 1; i >= 0; i--)
+            {
+                if (_spawned[i] != null)
+                    Destroy(_spawned[i]);
+            }
+            _spawned.Clear();
         }
 
         private void OnDrawGizmosSelected()
         {
-            Gizmos.color = Color.cyan;
+            if (!TryGetSpawnRect(out Vector3 center, out Vector2 halfSize))
+                return;
 
-            if (useRectArea)
-            {
-                Vector3 center = transform.position + (Vector3)areaOffset;
-                Gizmos.DrawWireCube(center, new Vector3(areaSize.x, areaSize.y, 0f));
-            }
-            else
-            {
-                Gizmos.DrawWireSphere(transform.position, radius);
-            }
+            Gizmos.color = new Color(0.2f, 0.9f, 0.9f, 0.35f);
+            Gizmos.DrawWireCube(center, new Vector3(halfSize.x * 2f, halfSize.y * 2f, 0f));
         }
-
-        #endregion
     }
 }
