@@ -7,18 +7,22 @@ namespace Pulseforge.Systems
 {
     /// <summary>
     /// 광석 스폰/리스폰 담당
-    /// - ScaleLevel에 따라 Spawn World Height(=스폰 영역 높이)를 사용
-    /// - Spawn World Height + FixedAspect + SafePercent로 Rect 스폰영역 계산
-    ///
+    /// - TargetCount(총량)는 OreAmount 업그레이드/스케일 등 기존 로직 유지
+    /// - 스폰 "종류 선택"은 OreSpawnTable(가중치/해금/업그레이드 반영)로 처리
+    /// 
     /// 핵심:
-    /// 1) SpawnWorldHeight는 MiningScaleManager.GetFinalSpawnWorldHeight()를 "우선" 사용(단일 소스)
-    /// 2) 현재 계산된 스폰 Rect를 외부에서 조회할 수 있도록 공개 API 제공
-    /// 3) 스폰 시 "팝 애니메이션" 지원 (0 -> overshoot -> 1)
-    /// 4) (추가) 세션 시작 초기 스폰을 "순차 스폰"으로 연출 가능
+    /// 1) SpawnWorldHeight는 MiningScaleManager.GetFinalSpawnWorldHeight() 우선(단일 소스)
+    /// 2) 외부에서 현재 스폰 Rect 조회 API 제공
+    /// 3) 스폰 팝 애니메이션 지원
+    /// 4) 초기 스폰을 순차 스폰(인트로 연출) 가능
     /// </summary>
     public class OreSpawner : MonoBehaviour
     {
-        [Header("Prefab")]
+        [Header("Prefab / Table")]
+        [Tooltip("OreSpawnTable이 있으면 테이블에서 프리팹을 뽑아 스폰한다.")]
+        [SerializeField] private OreSpawnTable spawnTable;
+
+        [Tooltip("테이블이 없거나 PickPrefab()이 null일 때 사용할 fallback 프리팹")]
         [SerializeField] private GameObject orePrefab;
 
         [Header("Spawn Flow")]
@@ -36,7 +40,10 @@ namespace Pulseforge.Systems
 
         [Header("Target Count: Upgrade (optional)")]
         [SerializeField] private bool useUpgradeOreAmount = true;
-        [SerializeField] private string upgradeIdOreAmount = "OreAmount";
+
+        [Tooltip("예: UD_OreAmount")]
+        [SerializeField] private string upgradeIdOreAmount = "UD_OreAmount";
+
         [SerializeField] private int amountPerUpgradeLevel = 5;
 
         [Header("Target Count: ScaleLevel (optional)")]
@@ -184,7 +191,7 @@ namespace Pulseforge.Systems
 
         public void StartFresh()
         {
-            StopSpawner(); // 루틴/플래그 정리
+            StopSpawner();
             ClearWorld();
             InvalidateClusters();
             EnsureClusters();
@@ -192,7 +199,6 @@ namespace Pulseforge.Systems
             int target = GetTargetCount();
             int initialSpawnCount = Mathf.Max(initialCount, target);
 
-            // 초기 스폰을 연출(순차)로 할지, 기존처럼 즉시 깔지 결정
             if (_initialRoutine != null) StopCoroutine(_initialRoutine);
 
             if (sequenceInitialSpawn && initialSpawnCount > 0)
@@ -253,7 +259,6 @@ namespace Pulseforge.Systems
 
                 remaining -= n;
 
-                // 다음 틱까지 대기(뾰뾰뾱 템포)
                 if (remaining > 0 && interval > 0f)
                 {
                     float wait = interval;
@@ -272,8 +277,6 @@ namespace Pulseforge.Systems
             }
 
             _initialRoutine = null;
-
-            // 초기 생성이 끝난 뒤에 리스폰 루프 시작
             BeginRespawnLoop();
         }
 
@@ -329,15 +332,14 @@ namespace Pulseforge.Systems
 
         private void SpawnInitialImmediate(int count)
         {
-            if (orePrefab == null) return;
-
             for (int i = 0; i < count; i++)
                 TrySpawnOne();
         }
 
         private void TrySpawnOne()
         {
-            if (orePrefab == null) return;
+            GameObject prefab = ResolveSpawnPrefab();
+            if (prefab == null) return;
 
             if (!TryGetSpawnRect(out Vector3 center, out Vector2 halfSize))
                 return;
@@ -345,12 +347,25 @@ namespace Pulseforge.Systems
             if (!TryFindSpawnPosition(center, halfSize, out Vector3 spawnPos))
                 return;
 
-            var go = Instantiate(orePrefab, spawnPos, Quaternion.identity, transform);
+            var go = Instantiate(prefab, spawnPos, Quaternion.identity, transform);
             _spawned.Add(go);
 
-            // 스폰 팝 연출
             if (enableSpawnPop && go != null && spawnPopDuration > 0.0001f)
                 StartCoroutine(CoSpawnPop(go));
+        }
+
+        private GameObject ResolveSpawnPrefab()
+        {
+            // 1) 테이블 우선
+            if (spawnTable != null)
+            {
+                var picked = spawnTable.PickPrefab();
+                if (picked != null)
+                    return picked;
+            }
+
+            // 2) fallback
+            return orePrefab;
         }
 
         private IEnumerator CoSpawnPop(GameObject go)
@@ -359,13 +374,9 @@ namespace Pulseforge.Systems
 
             Transform t = go.transform;
 
-            // 프리팹의 원래 스케일(예: 0.5)을 정답으로 저장
             Vector3 baseScale = t.localScale;
-
-            // "툭" 방지: 즉시 0에서 시작
             t.localScale = Vector3.zero;
 
-            // 팝 중 콜라이더 끄기(선택)
             Collider2D[] cols = null;
             if (disableColliderWhilePopping)
             {
@@ -377,7 +388,6 @@ namespace Pulseforge.Systems
                 }
             }
 
-            // 랜덤 딜레이 (개별 팝 타이밍 흔들기)
             float delay = 0f;
             if (spawnPopDelayRange.y > 0f)
             {
@@ -392,11 +402,10 @@ namespace Pulseforge.Systems
             if (go == null) yield break;
 
             float dur = Mathf.Max(0.01f, spawnPopDuration);
-            float half = dur * 0.6f;          // 0 -> overshoot
-            float rest = dur - half;          // overshoot -> 1
+            float half = dur * 0.6f;
+            float rest = dur - half;
             float over = Mathf.Max(1f, spawnPopOvershoot);
 
-            // 1) 0 -> overshoot
             float e = 0f;
             while (e < half)
             {
@@ -412,7 +421,6 @@ namespace Pulseforge.Systems
             if (go == null) yield break;
             t.localScale = baseScale * over;
 
-            // 2) overshoot -> 1
             e = 0f;
             while (e < rest)
             {
@@ -428,7 +436,6 @@ namespace Pulseforge.Systems
             if (go == null) yield break;
             t.localScale = baseScale;
 
-            // 콜라이더 복구(선택)
             if (disableColliderWhilePopping && cols != null)
             {
                 for (int i = 0; i < cols.Length; i++)
@@ -549,7 +556,6 @@ namespace Pulseforge.Systems
             EnsureClusters();
         }
 
-        // --- 단일 소스: SpawnWorldHeight 산출 ---
         private float GetFinalSpawnWorldHeight(int scaleLevel)
         {
             if (preferMiningScaleManagerHeight)

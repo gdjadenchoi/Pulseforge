@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using UnityEngine;
 
 namespace Pulseforge.Systems
@@ -7,6 +8,16 @@ namespace Pulseforge.Systems
     [DisallowMultipleComponent]
     public class Ore : MonoBehaviour
     {
+        /// <summary>
+        /// 이 Ore가 "깨졌을 때(HP<=0 판정 시점)" 1회 호출되는 이벤트.
+        /// - destroyOnBreak=true면 Destroy 직전에 호출됨
+        /// - destroyOnBreak=false면 HP 리셋 직전에 호출됨
+        ///
+        /// 주의:
+        /// - 구독자는 OnDisable/OnDestroy에서 구독 해제 권장
+        /// </summary>
+        public event Action<Ore> OnBrokenEvent;
+
         [Header("HP")]
         [SerializeField] private float maxHp = 30f;
         [SerializeField] private bool destroyOnBreak = true;
@@ -56,6 +67,16 @@ namespace Pulseforge.Systems
         private Vector3 basePos;
         private Vector3 baseScale;
 
+        // break guard (중복 파괴/중복 호출 방지)
+        private bool _brokenFired;
+
+        // ─────────────────────────────────────────────────────────────
+        // Public read-only state (SSOT helpers)
+        // ─────────────────────────────────────────────────────────────
+        public float MaxHp => Mathf.Max(1f, maxHp);
+        public float CurrentHp => hp;
+        public bool IsBroken => _brokenFired;
+
         private void Awake()
         {
             hp = Mathf.Max(1f, maxHp);
@@ -77,9 +98,13 @@ namespace Pulseforge.Systems
             }
         }
 
+        /// <summary>
+        /// 고정 데미지(절대값)를 적용.
+        /// </summary>
         public void ApplyHit(float damage)
         {
             if (damage <= 0f) return;
+            if (_brokenFired) return; // 이미 깨진 처리 들어갔으면 무시(안전)
 
             if (revealBarOnFirstHit && showHpBar) SetBarVisible(true);
 
@@ -92,8 +117,33 @@ namespace Pulseforge.Systems
                 OnBroken();
         }
 
+        /// <summary>
+        /// MaxHP의 %만큼 데미지를 적용.
+        /// - percentOfMax: 0.2f = 20%
+        /// - ceilToIntDamage: true면 데미지를 올림(ceil) 처리해 체감 보장
+        /// - minOneDamageIfHit: true면 Good/Perfect 같은 "히트"에서 최소 1데미지 보장
+        /// </summary>
+        public void ApplyHitPercentOfMax(float percentOfMax, bool ceilToIntDamage = true, bool minOneDamageIfHit = true)
+        {
+            if (percentOfMax <= 0f) return;
+            if (_brokenFired) return;
+
+            float dmg = MaxHp * percentOfMax;
+
+            if (ceilToIntDamage)
+                dmg = Mathf.Ceil(dmg);
+
+            if (minOneDamageIfHit)
+                dmg = Mathf.Max(1f, dmg);
+
+            ApplyHit(dmg);
+        }
+
         private void OnBroken()
         {
+            if (_brokenFired) return;
+            _brokenFired = true;
+
             // ✅ 보상 지급 (RewardManager 연동)
             if (rewardAmount > 0)
                 RewardManager.Instance?.Add(rewardType, rewardAmount);
@@ -103,16 +153,51 @@ namespace Pulseforge.Systems
             if (expAmount > 0 && LevelManager.Instance != null)
                 LevelManager.Instance.AddExp(expAmount);
 
+            // ✅ 외부 훅(예: BigOreSuccessHook)에게 "깨짐" 알림
+            // Destroy/리셋 전에 호출해두는 게 가장 안전함.
+            try
+            {
+                OnBrokenEvent?.Invoke(this);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e, this);
+            }
+
             if (destroyOnBreak)
                 Destroy(gameObject);
             else
             {
+                // 리셋형 광석이면 다시 깨질 수 있으므로 가드 해제
                 hp = maxHp;
+                _brokenFired = false;
+
                 UpdateBarFill();
             }
         }
 
         // ── HP Bar 생성/갱신 ─────────────────────────────────────────────────────
+
+        /// <summary>
+        /// 런타임에서 HP바 표시 여부를 제어.
+        /// "일반 Ore HP바 제거" 같은 요구를 코드 1줄로 처리하기 위한 API.
+        /// </summary>
+        public void SetHpBarEnabled(bool enabled, bool revealOnFirstHitMode = true)
+        {
+            showHpBar = enabled;
+            revealBarOnFirstHit = revealOnFirstHitMode;
+
+            if (!showHpBar)
+            {
+                if (barRoot != null) barRoot.gameObject.SetActive(false);
+                return;
+            }
+
+            EnsureBarBuilt();
+            SetBarVisible(!revealBarOnFirstHit);
+            MarkBarDirty();
+        }
+
         private void EnsureBarBuilt()
         {
             if (!showHpBar) return;

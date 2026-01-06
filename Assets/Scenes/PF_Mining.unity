@@ -227,6 +227,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ddd21f8c4e5dbc64caf72a9ce9805b91, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  spawnTable: {fileID: 11400000, guid: 5dff6f53a49539440924ebeb488bc3c2, type: 2}
   orePrefab: {fileID: 1284981850054371760, guid: 05322ff31e12e9b49870e05e15098773, type: 3}
   autoSpawnOnAwake: 0
   initialCount: 12
@@ -542,12 +543,78 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+  presentationExtraOrtho: 0.35
+  presentationPhaseRatio: 0.45
   topSafePercent: 0.1
   bottomSafePercent: 0.1
   verticalPaddingPercent: 0.2
   minOrthographicSize: 4.5
   maxOrthographicSize: 20
   startSessionOnZoomComplete: 1
+  reapplyZoomOnScaleChanged: 1
+  reapplyDelayRealtime: 0.05
+--- !u!1 &550179128
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 550179129}
+  - component: {fileID: 550179130}
+  m_Layer: 0
+  m_Name: BigOreSpawner
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &550179129
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 550179128}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: -0.64300984, y: 1.4632044, z: -0.53727156}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1214686451}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &550179130
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 550179128}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fa48fbac849902b41b125475db65fab8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  settings: {fileID: 11400000, guid: 03599b39507ee0844bbdaecfc5877b0b, type: 2}
+  bigOrePrefab: {fileID: 1284981850054371760, guid: 29b1238999f8ea74aa8a42669e9830a6, type: 3}
+  eventController: {fileID: 1968390454}
+  upgradeManager: {fileID: 0}
+  sessionController: {fileID: 2106649752}
+  spawnPoint: {fileID: 0}
+  spawnParent: {fileID: 0}
+  singleActiveOnly: 1
+  destroyBigOreOnFail: 1
+  occupiedRetryIntervalSec: 0.5
+  clearLeftoverOnSessionStart: 0
+  clearOresOnSpawn: 1
+  oreMask:
+    serializedVersion: 2
+    m_Bits: 0
+  clearRadiusOverride: 0
+  clearDamage: 999999
+  debugLog: 1
 --- !u!1 &768983656
 GameObject:
   m_ObjectHideFlags: 0
@@ -660,6 +727,51 @@ Transform:
   m_Children: []
   m_Father: {fileID: 1012597411}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &835965169
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 835965171}
+  - component: {fileID: 835965170}
+  m_Layer: 0
+  m_Name: BigOreEventDebug
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &835965170
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 835965169}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0877013447a70d644b314229cf2afeca, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  controller: {fileID: 1968390454}
+--- !u!4 &835965171
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 835965169}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -0.64300984, y: 1.4632044, z: -0.53727156}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &971839535
 GameObject:
   m_ObjectHideFlags: 0
@@ -758,6 +870,7 @@ RectTransform:
   - {fileID: 1891115835}
   - {fileID: 1043249874}
   - {fileID: 1203574079}
+  - {fileID: 1533251151}
   m_Father: {fileID: 1940756400}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
@@ -1027,6 +1140,7 @@ Transform:
   - {fileID: 832034778}
   - {fileID: 2106649753}
   - {fileID: 768983657}
+  - {fileID: 1968390455}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1043249873
@@ -1489,6 +1603,7 @@ Transform:
   m_Children:
   - {fileID: 142779481}
   - {fileID: 1868766876}
+  - {fileID: 550179129}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1382613161
@@ -1950,6 +2065,41 @@ SpriteRenderer:
   m_WasSpriteAssigned: 0
   m_MaskInteraction: 0
   m_SpriteSortPoint: 0
+--- !u!1 &1533251150
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1533251151}
+  m_Layer: 5
+  m_Name: RhythmUI
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &1533251151
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1533251150}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 971839539}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1676027903
 GameObject:
   m_ObjectHideFlags: 0
@@ -2326,6 +2476,65 @@ Transform:
   - {fileID: 22509591}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1968390453
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1968390455}
+  - component: {fileID: 1968390454}
+  m_Layer: 0
+  m_Name: BigOreEventController
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1968390454
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1968390453}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b4b35c4c810f9cb4f8f070647acae9d8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  baseEventDurationSec: 6
+  maxEventDurationSec: 10
+  endOnZero: 1
+  bpm: 90
+  incrementBeatIndex: 1
+  addTimeOnGood: 0.05
+  addTimeOnPerfect: 0.15
+  penaltyOnMiss: 0
+  indicator: {fileID: 0}
+  autoToggleIndicator: 1
+  pulseScale: 1.12
+  pulseReturnSec: 0.1
+  pulseAlpha: 1
+  baseAlpha: 0.35
+  pulseAlphaAdd: 0.35
+--- !u!4 &1968390455
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1968390453}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1012597411}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2056949741
 GameObject:
   m_ObjectHideFlags: 0
@@ -2520,11 +2729,9 @@ MonoBehaviour:
   introMaxWaitSec: 3
   hideCursorOnSceneEnter: 1
   delayAfterSpawn: 0.12
-  delayBetweenTexts: 0.1
   delayBeforeGameplay: 0.05
   startTextPresenter: {fileID: 1203574080}
-  startText1: Start
-  startText2: Start!
+  startTextSingle: Start!!
 --- !u!4 &2106649753
 Transform:
   m_ObjectHideFlags: 0
@@ -2769,3 +2976,4 @@ SceneRoots:
   - {fileID: 1012597411}
   - {fileID: 1214686451}
   - {fileID: 1940756400}
+  - {fileID: 835965171}

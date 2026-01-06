@@ -14,7 +14,7 @@ GameObject:
   - component: {fileID: 7107091600331797271}
   - component: {fileID: 8227153146880743249}
   m_Layer: 6
-  m_Name: OrePrefab
+  m_Name: OrePrefab 1
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -79,7 +79,7 @@ SpriteRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
-  m_Sprite: {fileID: -2869916849532359384, guid: 73f694eaa0ab19846adc5dead224ae22, type: 3}
+  m_Sprite: {fileID: -6613490888911143467, guid: ebb4625bbe0ab2f4889de39455c52b49, type: 3}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
@@ -141,7 +141,7 @@ MonoBehaviour:
   maxHp: 30
   destroyOnBreak: 1
   rewardType: 0
-  rewardAmount: 1
+  rewardAmount: 3
   expAmount: 5
   wobbleOnHit: 1
   wobblePos: 0.035

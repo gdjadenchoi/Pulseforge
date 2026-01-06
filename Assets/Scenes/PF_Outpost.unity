@@ -564,15 +564,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f24aa165f0262a24a966c66380661ba0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _definitions:
-  - {fileID: 11400000, guid: 96017c627d82900458f970884726e6b0, type: 2}
+  definitions:
   - {fileID: 11400000, guid: 9debe73dbe1f0584a8bf8dc023af7f36, type: 2}
   - {fileID: 11400000, guid: ce635e68becc0414881089f226cb626b, type: 2}
   - {fileID: 11400000, guid: ba7e72c0508a4494daf3823b32b23193, type: 2}
   - {fileID: 11400000, guid: 9eeb87e27e405964a973e38a59b89b2a, type: 2}
-  _initialStates: []
-  _defaultMaxLevel: 99
+  - {fileID: 11400000, guid: 96017c627d82900458f970884726e6b0, type: 2}
+  initialStates: []
   _logUpgrade: 1
+  _logMissWarnings: 0
 --- !u!4 &921550793
 Transform:
   m_ObjectHideFlags: 0
@@ -1525,37 +1525,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1732901502
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1732901503}
-  m_Layer: 0
-  m_Name: EventSystem
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1732901503
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1732901502}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1738108699
 GameObject:
   m_ObjectHideFlags: 0
@@ -1989,7 +1958,6 @@ SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
   - {fileID: 1611079230}
-  - {fileID: 1732901503}
   - {fileID: 277753719}
   - {fileID: 1581552401}
   - {fileID: 752012420}

@@ -11,7 +11,7 @@ namespace Pulseforge.UI
     /// <summary>
     /// 세션 종료 시 표시되는 결과 요약 팝업.
     /// - 이번 세션에서 얻은 보상 목록을 문자열로 만들어 보여준다.
-    /// - Mine Again: 같은 세션을 다시 시작
+    /// - Mine Again: "세션 플로우"로 재시작(월드 정리/스폰/인트로 포함)
     /// - Upgrade : 아웃포스트(PF_Outpost) 씬으로 이동
     /// </summary>
     public class SessionEndPopup : MonoBehaviour
@@ -34,14 +34,11 @@ namespace Pulseforge.UI
 
         private void Awake()
         {
-            // 패널이 따로 지정되지 않았다면 자기 자신을 패널로 사용
             if (panel == null)
                 panel = gameObject;
 
-            // CanvasGroup이 있으면 페이드/입력 제어에 사용
             _canvasGroup = GetComponent<CanvasGroup>();
 
-            // 시작 시 항상 비활성 상태로 두기
             HideImmediate();
 
             if (mineAgainButton != null)
@@ -69,8 +66,6 @@ namespace Pulseforge.UI
         /// <summary>
         /// 세션 종료 시 SessionController에서 호출되는 진입 함수.
         /// </summary>
-        /// <param name="rewards">RewardType별 누적 보상</param>
-        /// <param name="session">해당 세션 컨트롤러</param>
         public void Show(IReadOnlyDictionary<RewardType, int> rewards, SessionController session)
         {
             _controller = session;
@@ -84,7 +79,6 @@ namespace Pulseforge.UI
                 _canvasGroup.interactable = true;
             }
 
-            // ===== 요약 텍스트 구성 =====
             if (summaryText != null)
             {
                 if (rewards == null || rewards.Count == 0)
@@ -97,15 +91,13 @@ namespace Pulseforge.UI
                     sb.AppendLine("이번 세션 보상");
 
                     foreach (var kv in rewards)
-                    {
                         sb.AppendLine($"{kv.Key}: {kv.Value}");
-                    }
 
                     summaryText.text = sb.ToString();
                 }
             }
 
-            // ===== 버튼 리스너 정리 =====
+            // 버튼 리스너 정리
             if (mineAgainButton != null)
             {
                 mineAgainButton.onClick.RemoveAllListeners();
@@ -130,9 +122,11 @@ namespace Pulseforge.UI
             // 팝업 먼저 닫고
             HideImmediate();
 
-            // 세션 다시 시작
-            // (현재 구현은 StartSession()을 직접 호출하는 구조)
-            _controller.StartSession();
+            // ✅ 중요:
+            // StartSession() 직접 호출은 "월드 정리/스폰/인트로"가 생략될 수 있어
+            // BigOre 잔재/상태 꼬임의 원인이 된다.
+            // 따라서 재시작은 반드시 BeginSessionFlow()로 들어가야 한다.
+            _controller.RestartSessionFromPopup(); // 내부에서 BeginSessionFlow() 호출
         }
 
         /// <summary>

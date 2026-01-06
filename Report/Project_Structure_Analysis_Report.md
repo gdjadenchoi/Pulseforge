@@ -545,3 +545,9 @@ targetSize = Clamp(targetSize, minOrthographicSize, maxOrthographicSize)
 - 이벤트 구독/해제 누락 주의
 
 
+
+
+
+
+
+

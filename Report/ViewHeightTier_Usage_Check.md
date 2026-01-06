@@ -150,3 +150,9 @@ GetSpawnWorldHeightByScaleLevel() → 자체 리스트 참조
 
 현재는 **각 컴포넌트가 독립적으로 ViewHeightTier 테이블을 관리**하고 있는 상태입니다.
 
+
+
+
+
+
+

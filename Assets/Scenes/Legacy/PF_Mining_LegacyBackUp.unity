@@ -305,22 +305,71 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   orePrefab: {fileID: 1284981850054371760, guid: 05322ff31e12e9b49870e05e15098773, type: 3}
+  spawnTable: {fileID: 11400000, guid: 5dff6f53a49539440924ebeb488bc3c2, type: 2}
+  rngSeed: 0
+  autoSpawnOnAwake: 0
   initialCount: 12
-  radius: 5
-  useRectArea: 1
-  areaSize: {x: 5, y: 9}
-  areaOffset: {x: 0, y: 0}
-  useGrid: 1
-  gridSize: 0.5
-  minDistance: 0.6
-  maxAttemptsPerSpawn: 32
   baseTargetCount: 12
+  respawnToTargetCount: 1
   respawnInterval: 0.3
   batchMax: 3
-  useTimeRamp: 0
-  timeRampInterval: 10
-  addAmount: 5
-  maxExtraFromTimeRamp: 0
+  useUpgradeOreAmount: 1
+  upgradeIdOreAmount: OreAmount
+  amountPerUpgradeLevel: 5
+  addByScaleLevel: 0
+  extraPerScaleLevel: 4
+  useRectArea: 1
+  areaOffset: {x: 0, y: 0}
+  fixedAspect: 0.5625
+  topSafePercent: 0.1
+  bottomSafePercent: 0.1
+  preferMiningScaleManagerHeight: 1
+  viewHeightTiers:
+  - scaleLevel: 0
+    spawnWorldHeight: 10
+  - scaleLevel: 1
+    spawnWorldHeight: 13
+  - scaleLevel: 2
+    spawnWorldHeight: 16
+  useClusterDistribution: 1
+  clusterCount: 4
+  clusterRadiusRange: {x: 1, y: 2}
+  clusterSpawnChance: 0.7
+  minDistance: 0.6
+  maxAttemptsPerSpawn: 32
+  enableSpawnPop: 1
+  spawnPopDuration: 0.12
+  spawnPopOvershoot: 1.15
+  spawnPopDelayRange: {x: 0, y: 0.08}
+  disableColliderWhilePopping: 1
+  spawnPopCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 1
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  sequenceInitialSpawn: 1
+  initialSpawnInterval: 0.03
+  initialSpawnBatch: 1
+  initialSpawnJitter: 0.01
 --- !u!4 &142779481
 Transform:
   m_ObjectHideFlags: 0
@@ -1941,6 +1990,7 @@ MonoBehaviour:
   OnChanged:
     m_PersistentCalls:
       m_Calls: []
+  _logRewards: 0
 --- !u!4 &1604851223
 Transform:
   m_ObjectHideFlags: 0
@@ -2720,6 +2770,13 @@ MonoBehaviour:
   criticalThreshold: 3
   oreRootOverride: {fileID: 0}
   drillCursor: {fileID: 1868766878}
+  introSpawnStableSec: 0.15
+  introMaxWaitSec: 3
+  hideCursorOnSceneEnter: 1
+  delayAfterSpawn: 0.12
+  delayBeforeGameplay: 0.05
+  startTextPresenter: {fileID: 0}
+  startTextSingle: Start!
 --- !u!4 &2106649753
 Transform:
   m_ObjectHideFlags: 0

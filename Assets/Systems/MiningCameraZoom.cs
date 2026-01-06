@@ -5,10 +5,12 @@ namespace Pulseforge.Systems
 {
     /// <summary>
     /// PF_Mining 진입 시 카메라를 "스폰 영역(SpawnWorldHeight) 기준"으로 줌 맞춘 뒤,
-    /// 줌 완료 시점에 세션 시작(SessionController.BeginSessionFlow)을 트리거하는 안정 버전.
+    /// 줌 완료 시점에 세션 시작(SessionController.BeginSessionFlow)을 트리거한다.
     ///
-    /// 목표 흐름:
-    /// 아웃게임 -> 인게임 진입 -> (스케일/업그레이드 로드 완료) -> 카메라 줌 -> 줌 완료 -> 스폰/시간/커서 시작
+    /// 개선 목표:
+    /// - 스케일/업그레이드가 늦게 확정돼도(초기 0 -> 이후 2) 줌을 다시 반영
+    /// - target == start여도 "줌 연출"은 항상 보여줌(약간 더 줌아웃 -> 목표로 복귀)
+    /// - timeScale 영향 제거(unscaled)
     /// </summary>
     [RequireComponent(typeof(Camera))]
     public class MiningCameraZoom : MonoBehaviour
@@ -20,17 +22,22 @@ namespace Pulseforge.Systems
         [Tooltip("줌 완료 후 BeginSessionFlow()를 호출할 세션 컨트롤러")]
         [SerializeField] private SessionController sessionController;
 
-        [Header("Animation")]
+        [Header("Animation (unscaled)")]
         [SerializeField] private float zoomDuration = 0.5f;
         [SerializeField] private float zoomDelay = 0.2f;
         [SerializeField] private AnimationCurve zoomCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
 
+        [Header("Presentation (always show even if no zoom needed)")]
+        [Tooltip("목표가 start와 같아도 연출을 위해 추가로 줌아웃할 양(orthographicSize 가산)")]
+        [SerializeField] private float presentationExtraOrtho = 0.35f;
+
+        [Tooltip("연출(추가 줌아웃) 단계 시간 비율. (0~1)")]
+        [Range(0.05f, 0.95f)]
+        [SerializeField] private float presentationPhaseRatio = 0.45f;
+
         [Header("Match Spawn Area (same logic as OreSpawner)")]
-        [Tooltip("OreSpawner와 동일하게 상/하 UI safe percent를 반영해서 카메라 목표 높이를 계산")]
         [Range(0f, 0.4f)] [SerializeField] private float topSafePercent = 0.10f;
         [Range(0f, 0.4f)] [SerializeField] private float bottomSafePercent = 0.10f;
-
-        [Tooltip("스폰 영역(usableHeight) 대비 카메라가 추가로 확보할 세로 여유(연출/시야)")]
         [Range(0f, 0.5f)] [SerializeField] private float verticalPaddingPercent = 0.10f;
 
         [Header("Clamp (safety)")]
@@ -38,17 +45,23 @@ namespace Pulseforge.Systems
         [SerializeField] private float maxOrthographicSize = 10f;
 
         [Header("Flow")]
-        [Tooltip("줌 완료 후 세션 시작을 자동으로 호출할지")]
         [SerializeField] private bool startSessionOnZoomComplete = true;
+
+        [Header("Reapply on Scale Change")]
+        [Tooltip("MiningScaleManager scale 변경 시 줌을 다시 계산/적용할지")]
+        [SerializeField] private bool reapplyZoomOnScaleChanged = true;
+
+        [Tooltip("scale 변경 후 즉시 줌을 다시 잡지 않고 약간 기다렸다가 적용(업그레이드 로드 타이밍 완충)")]
+        [SerializeField] private float reapplyDelayRealtime = 0.05f;
 
         private Coroutine _zoomRoutine;
         private Coroutine _autoStartRoutine;
+        private Coroutine _reapplyRoutine;
 
-        // "줌 완료 시 세션 시작"은 1회만
         private bool _sessionStartedOnce;
-
-        // ✅ 안전장치: 줌이 진행 중이었는지 추적 (Disable 등으로 중단될 때 유실 방지)
         private bool _zoomInProgress;
+
+        private float _lastAppliedTargetOrtho = -1f;
 
         private void Awake()
         {
@@ -58,19 +71,19 @@ namespace Pulseforge.Systems
 
         private void OnEnable()
         {
-            // 중요: 스케일/업그레이드 로드 타이밍 이슈 방지 (1프레임 대기)
+            HookScaleEvents();
+
             if (_autoStartRoutine != null) StopCoroutine(_autoStartRoutine);
             _autoStartRoutine = StartCoroutine(StartZoomNextFrame());
         }
 
         private void OnDisable()
         {
-            // ✅ 줌이 진행 중이었다면, "줌 완료 트리거"가 유실될 수 있다.
-            // 정책(Q1=A): 줌 완료 후에만 세션 시작.
-            // 여기서는 "중단 시점의 카메라 상태를 최종값으로 확정"하고, 세션 시작을 진행한다.
+            UnhookScaleEvents();
+
+            // 줌 도중 disable되면 트리거 유실 방지
             if (Application.isPlaying && startSessionOnZoomComplete && !_sessionStartedOnce && _zoomInProgress)
             {
-                // 가능한 한 '최종 목표 사이즈'로 고정한 뒤 시작한다.
                 ForceApplyTargetSize();
                 TryStartSessionOnce();
             }
@@ -78,51 +91,99 @@ namespace Pulseforge.Systems
             if (_autoStartRoutine != null) StopCoroutine(_autoStartRoutine);
             _autoStartRoutine = null;
 
+            if (_reapplyRoutine != null) StopCoroutine(_reapplyRoutine);
+            _reapplyRoutine = null;
+
             if (_zoomRoutine != null) StopCoroutine(_zoomRoutine);
             _zoomRoutine = null;
 
             _zoomInProgress = false;
         }
 
+        private void HookScaleEvents()
+        {
+            if (!reapplyZoomOnScaleChanged) return;
+
+            var msm = MiningScaleManager.Instance;
+            if (msm != null)
+            {
+                msm.OnScaleChanged -= HandleScaleChanged;
+                msm.OnScaleChanged += HandleScaleChanged;
+            }
+        }
+
+        private void UnhookScaleEvents()
+        {
+            if (!reapplyZoomOnScaleChanged) return;
+
+            var msm = MiningScaleManager.Instance;
+            if (msm != null)
+            {
+                msm.OnScaleChanged -= HandleScaleChanged;
+            }
+        }
+
+        private void HandleScaleChanged(int newScaleLevel)
+        {
+            if (!isActiveAndEnabled) return;
+            if (!targetCamera) return;
+
+            // 세션이 이미 시작됐더라도, "영역 확장 업그레이드"는 즉시 카메라에 반영되는 게 자연스러움
+            if (_reapplyRoutine != null) StopCoroutine(_reapplyRoutine);
+            _reapplyRoutine = StartCoroutine(CoReapplyZoomAfterDelay());
+        }
+
+        private IEnumerator CoReapplyZoomAfterDelay()
+        {
+            if (reapplyDelayRealtime > 0f)
+                yield return new WaitForSecondsRealtime(reapplyDelayRealtime);
+
+            StartZoom(forceRecalculate: true);
+        }
+
         private IEnumerator StartZoomNextFrame()
         {
-            // MiningScaleManager.Start / UpgradeManager 로드가 먼저 끝나도록 한 프레임 양보
+            // 스케일 매니저/업그레이드 로드 타이밍 완충(최소 1프레임)
             yield return null;
-            StartZoom();
+            StartZoom(forceRecalculate: true);
         }
 
         [ContextMenu("Start Zoom")]
-        public void StartZoom()
+        public void StartZoom() => StartZoom(forceRecalculate: true);
+
+        private void StartZoom(bool forceRecalculate)
         {
             if (!targetCamera) return;
 
             float startSize = targetCamera.orthographicSize;
+
             float targetSize = CalculateTargetOrthoSize();
-            targetSize = Mathf.Max(targetSize, startSize); // 🔥 줌인 방지
+            // 줌인 방지(원칙 유지): 최종 목표는 start 이상
+            targetSize = Mathf.Max(targetSize, startSize);
+
+            // 같은 값이어도 “연출”은 항상 보여줘야 함
+            float presentationPeak = Mathf.Clamp(targetSize + Mathf.Max(0f, presentationExtraOrtho), minOrthographicSize, maxOrthographicSize);
 
 #if UNITY_EDITOR
             if (Application.isPlaying)
             {
-                float camWorldH = targetSize * 2f;
-                Debug.Log($"[MiningCameraZoom] targetOrtho={targetSize:F3} (camWorldH={camWorldH:F3}) " +
-                          $"safeTop={topSafePercent}, safeBottom={bottomSafePercent}, pad={verticalPaddingPercent}");
+                Debug.Log($"[MiningCameraZoom] start={startSize:F3}, target={targetSize:F3}, peak={presentationPeak:F3}");
             }
 #endif
 
             if (_zoomRoutine != null) StopCoroutine(_zoomRoutine);
 
-            // 줌이 필요 없으면 즉시 적용 + 세션 시작(옵션)
-            if (Mathf.Approximately(startSize, targetSize) || zoomDuration <= 0f)
+            // 만약 이미 같은 target을 적용 중이라면 과도한 재시작 방지
+            // (단, 처음 진입 연출은 무조건 보여주므로 _lastAppliedTargetOrtho<0 일 때는 통과)
+            if (_lastAppliedTargetOrtho >= 0f && Mathf.Approximately(_lastAppliedTargetOrtho, targetSize) && !_zoomInProgress)
             {
-                targetCamera.orthographicSize = targetSize;
-                _zoomInProgress = false;
+                // 이미 목표가 반영된 상태면 세션 시작만 보장
                 TryStartSessionOnce();
+                return;
             }
-            else
-            {
-                _zoomInProgress = true;
-                _zoomRoutine = StartCoroutine(ZoomRoutine(startSize, targetSize));
-            }
+
+            _zoomInProgress = true;
+            _zoomRoutine = StartCoroutine(ZoomRoutineTwoPhase(startSize, presentationPeak, targetSize));
         }
 
         private void ForceApplyTargetSize()
@@ -131,43 +192,66 @@ namespace Pulseforge.Systems
 
             float startSize = targetCamera.orthographicSize;
             float targetSize = CalculateTargetOrthoSize();
-            targetSize = Mathf.Max(targetSize, startSize); // 줌인 방지
+            targetSize = Mathf.Max(targetSize, startSize);
 
             targetCamera.orthographicSize = targetSize;
+            _lastAppliedTargetOrtho = targetSize;
         }
 
         private float CalculateTargetOrthoSize()
         {
-            // 1) scaleLevel 기반 spawnWorldHeight를 "단일 소스"에서 가져옴
             float spawnWorldHeight = 10f;
 
             var msm = MiningScaleManager.Instance;
             if (msm != null)
                 spawnWorldHeight = msm.GetFinalSpawnWorldHeight();
 
-            // 2) OreSpawner와 동일하게 safe 적용해서 usableHeight 산출
             float safeMul = Mathf.Clamp01(1f - topSafePercent - bottomSafePercent);
             if (safeMul <= 0.0001f) safeMul = 0.0001f;
 
             float usableHeight = spawnWorldHeight * safeMul;
-
-            // 3) 카메라는 usableHeight를 기본으로, 패딩을 더해서 보여줌
             float paddedHeight = usableHeight * (1f + verticalPaddingPercent);
 
-            // 4) orthographicSize는 "세로 높이의 절반"
             float ortho = paddedHeight * 0.5f;
             return Mathf.Clamp(ortho, minOrthographicSize, maxOrthographicSize);
         }
 
-        private IEnumerator ZoomRoutine(float from, float to)
+        /// <summary>
+        /// 항상 연출을 보여주기 위한 2단계 줌:
+        /// 1) start -> peak(살짝 더 줌아웃)
+        /// 2) peak  -> finalTarget
+        /// unscaled로 구동
+        /// </summary>
+        private IEnumerator ZoomRoutineTwoPhase(float start, float peak, float finalTarget)
         {
-            if (zoomDelay > 0f) yield return new WaitForSeconds(zoomDelay);
+            if (zoomDelay > 0f) yield return new WaitForSecondsRealtime(zoomDelay);
 
+            float total = Mathf.Max(0.0001f, zoomDuration);
+            float phaseA = Mathf.Clamp(total * presentationPhaseRatio, 0.0001f, total);
+            float phaseB = Mathf.Max(0.0001f, total - phaseA);
+
+            // Phase A: start -> peak
+            yield return CoZoomUnscaled(start, peak, phaseA);
+
+            // Phase B: peak -> final
+            yield return CoZoomUnscaled(peak, finalTarget, phaseB);
+
+            if (targetCamera) targetCamera.orthographicSize = finalTarget;
+
+            _lastAppliedTargetOrtho = finalTarget;
+            _zoomRoutine = null;
+            _zoomInProgress = false;
+
+            TryStartSessionOnce();
+        }
+
+        private IEnumerator CoZoomUnscaled(float from, float to, float duration)
+        {
             float elapsed = 0f;
-            while (elapsed < zoomDuration)
+            while (elapsed < duration)
             {
-                elapsed += Time.deltaTime;
-                float t = Mathf.Clamp01(elapsed / zoomDuration);
+                elapsed += Time.unscaledDeltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
 
                 float curveT = zoomCurve != null ? zoomCurve.Evaluate(t) : t;
                 float size = Mathf.Lerp(from, to, curveT);
@@ -175,14 +259,6 @@ namespace Pulseforge.Systems
                 if (targetCamera) targetCamera.orthographicSize = size;
                 yield return null;
             }
-
-            if (targetCamera) targetCamera.orthographicSize = to;
-            _zoomRoutine = null;
-
-            _zoomInProgress = false;
-
-            // 줌 완료 후 세션 시작
-            TryStartSessionOnce();
         }
 
         private void TryStartSessionOnce()
@@ -202,12 +278,12 @@ namespace Pulseforge.Systems
 #endif
                 sessionController.BeginSessionFlow();
             }
+#if UNITY_EDITOR
             else
             {
-#if UNITY_EDITOR
                 Debug.LogWarning("[MiningCameraZoom] SessionController not found. Cannot start session.");
-#endif
             }
+#endif
         }
     }
 }

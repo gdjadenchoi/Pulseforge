@@ -92,7 +92,7 @@ namespace Pulseforge.Systems
         private void RefreshScaleLevel(bool force)
         {
             int upgradeLevel = 0;
-            var um = UpgradeManager.Instance;
+            var um = Pulseforge.Systems.UpgradeManager.Instance;
             if (um != null && !string.IsNullOrEmpty(mainUpgradeId))
             {
                 upgradeLevel = um.GetLevel(mainUpgradeId);

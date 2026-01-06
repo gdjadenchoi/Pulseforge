@@ -35,14 +35,11 @@ namespace Pulseforge.Systems
         [Header("Start Text Presenter (TMP)")]
         [SerializeField] private StartTextPresenter startTextPresenter;
 
-        // ✅ Start는 1번만
         [SerializeField] private string startTextSingle = "Start!";
 
-        // ----- 상태 -----
         public bool IsRunning { get; private set; }
         public float Remaining { get; private set; }
 
-        // remaining, normalized(0~1)
         public event Action OnSessionStart;
         public event Action OnSessionEnd;
         public event Action<float, float> OnTimeChanged;
@@ -54,6 +51,9 @@ namespace Pulseforge.Systems
 
         private Coroutine _beginFlowRoutine;
         private bool _beginFlowInProgress;
+
+        // ✅ BigOre 같은 외부 요인으로 타이머만 일시정지할 때 사용
+        private bool _timerPaused;
 
         void Awake()
         {
@@ -77,7 +77,6 @@ namespace Pulseforge.Systems
             if (hideCursorOnSceneEnter)
                 SetCursorVisible(false);
 
-            // Start 텍스트가 혹시 켜져있으면 즉시 숨김
             if (startTextPresenter != null)
                 startTextPresenter.HideImmediate();
         }
@@ -105,6 +104,7 @@ namespace Pulseforge.Systems
         void Update()
         {
             if (!IsRunning) return;
+            if (_timerPaused) return; // ✅ 타이머만 멈춤(커서/게임플레이는 유지)
 
             Remaining -= Time.deltaTime;
             if (Remaining < 0f) Remaining = 0f;
@@ -131,7 +131,6 @@ namespace Pulseforge.Systems
 
         public void BeginSessionFlow()
         {
-            // ✅ 중복 호출 방지
             if (_beginFlowInProgress) return;
             _beginFlowInProgress = true;
 
@@ -143,14 +142,13 @@ namespace Pulseforge.Systems
                 _beginFlowRoutine = null;
             }
 
-            // 세션 정지 + 커서 숨김
             IsRunning = false;
+            _timerPaused = false;
             SetCursorVisible(false);
 
             if (startTextPresenter != null)
                 startTextPresenter.HideImmediate();
 
-            // spawner 재확보
             if (_spawner == null)
             {
 #if UNITY_6000_0_OR_NEWER
@@ -167,16 +165,12 @@ namespace Pulseforge.Systems
                 return;
             }
 
-            // 1) 스폰 시작
             _spawner.StartFresh();
-
-            // 2) 스폰 안정화 -> 텍스트 1회 -> 커서+타이머 시작
             _beginFlowRoutine = StartCoroutine(CoIntroThenGameplay());
         }
 
         private IEnumerator CoIntroThenGameplay()
         {
-            // --- 스폰 안정화 대기 ---
             Transform root = _spawner != null ? _spawner.transform : null;
             if (root != null)
             {
@@ -185,14 +179,12 @@ namespace Pulseforge.Systems
 
                 float elapsed = 0f;
 
-                // 최소 1개라도 나올 때까지
                 while (root.childCount <= 0 && elapsed < maxWait)
                 {
                     elapsed += Time.unscaledDeltaTime;
                     yield return null;
                 }
 
-                // 증가 멈춤 안정화
                 float stable = 0f;
                 int lastCount = root.childCount;
 
@@ -217,19 +209,15 @@ namespace Pulseforge.Systems
                 }
             }
 
-            // --- 스폰 -> 숨고르기 ---
             if (delayAfterSpawn > 0f)
                 yield return new WaitForSecondsRealtime(delayAfterSpawn);
 
-            // --- Start! (연출 1회) ---
             if (startTextPresenter != null)
                 yield return StartCoroutine(startTextPresenter.PlayRoutine(startTextSingle));
 
-            // --- 텍스트 끝난 뒤 텀 ---
             if (delayBeforeGameplay > 0f)
                 yield return new WaitForSecondsRealtime(delayBeforeGameplay);
 
-            // ✅ 여기서부터 실제 플레이 시작: 커서 + 타이머 (동시에)
             SetCursorVisible(true);
             StartSession();
 
@@ -246,8 +234,8 @@ namespace Pulseforge.Systems
             Remaining = baseDurationSec;
             _firedCritical = false;
             IsRunning = true;
+            _timerPaused = false;
 
-            // ✅ StartTextPresenter는 여기에 절대 연결하지 마(중복 원인)
             OnSessionStart?.Invoke();
         }
 
@@ -256,6 +244,7 @@ namespace Pulseforge.Systems
             if (!IsRunning) return;
 
             IsRunning = false;
+            _timerPaused = false;
             SetCursorVisible(false);
 
             IReadOnlyDictionary<RewardType, int> snapshot =
@@ -273,7 +262,6 @@ namespace Pulseforge.Systems
                 popup.Show(snapshot, this);
 
             OnSessionEnd?.Invoke();
-
             _beginFlowInProgress = false;
         }
 
@@ -298,7 +286,23 @@ namespace Pulseforge.Systems
         }
 
         // =====================================================================
-        //  Cursor visibility (완전 비표시)
+        //  ✅ Pause/Resume (BigOre Event용)
+        // =====================================================================
+
+        public void PauseTimer()
+        {
+            _timerPaused = true;
+        }
+
+        public void ResumeTimer()
+        {
+            _timerPaused = false;
+        }
+
+        public bool IsTimerPaused => _timerPaused;
+
+        // =====================================================================
+        //  Cursor visibility
         // =====================================================================
 
         private void SetCursorVisible(bool visible)

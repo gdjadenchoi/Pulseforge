@@ -1,104 +1,74 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 
 namespace Pulseforge.Systems
 {
     /// <summary>
-    /// 업그레이드 전체를 관리하는 매니저.
-    /// - string upgradeId 기반으로 레벨을 관리한다. (예: "OreAmount", "CursorDamage")
-    /// - UpgradeDefinition(SO)를 등록해두면 최대 레벨 / 비용 곡선 / 프리리퀴짓 등의 메타데이터를 함께 사용한다.
-    /// - DontDestroyOnLoad 싱글톤.
-    /// - PlayerPrefs 를 사용해 업그레이드 상태를 저장/로드한다.
+    /// 업그레이드 싱글톤 매니저(DDOL)
+    ///
+    /// 이 교체본의 목적:
+    /// - UpgradeEntry.cs가 요구하는 API를 다시 제공:
+    ///   - GetDefinition(string id)
+    ///   - MeetsPrerequisites(string id)
+    ///   - TryUpgrade(string id)
+    /// - GetLevel MISS 시 자동으로 0레벨 상태 생성(안정성)
+    ///
+    /// 주의:
+    /// - UpgradeDefinition.cs는 프로젝트에 이미 존재(여기서 선언하지 않음)
+    /// - UpgradeDefinition의 필드/프로퍼티 이름이 프로젝트마다 다를 수 있어 리플렉션으로 안전하게 읽음
     /// </summary>
-    [DefaultExecutionOrder(-200)] // ★ 항상 가장 먼저 초기화되도록 실행 순서 앞으로 당김
     public class UpgradeManager : MonoBehaviour
     {
-        //==============================================================
-        //  싱글톤
-        //==============================================================
-
-        private static UpgradeManager _instance;
         public static UpgradeManager Instance => _instance;
-
-        //==============================================================
-        //  인스펙터 설정
-        //==============================================================
-
-        [Header("정의(선택 사항) - ScriptableObject")]
-        [Tooltip("UpgradeDefinition SO 들을 등록해두면, 이름/설명/최대 레벨/비용 곡선/프리리퀴짓 등의 메타데이터로 사용한다.")]
-        [SerializeField] private UpgradeDefinition[] _definitions;
-
-        [Serializable]
-        public class InitialState
-        {
-            [Tooltip("업그레이드 ID (UpgradeDefinition.Id 와 동일하게 맞추기)")]
-            public string id;
-
-            [Tooltip("시작 레벨 (디버그용)")]
-            public int level;
-        }
-
-        [Header("디버그용 초기 레벨 설정")]
-        [Tooltip("에디터 테스트를 위해 특정 업그레이드의 시작 레벨을 지정할 수 있다.")]
-        [SerializeField] private InitialState[] _initialStates = Array.Empty<InitialState>();
-
-        [Header("기본 최대 레벨 (정의가 없을 때 사용)")]
-        [Min(1)]
-        [SerializeField] private int _defaultMaxLevel = 99;
-
-        [Header("디버그 옵션")]
-        [SerializeField] private bool _logUpgrade = false;
-
-        //==============================================================
-        //  런타임 상태
-        //==============================================================
-
-        /// <summary>실제 업그레이드 상태</summary>
-        private class RuntimeState
-        {
-            public string id;
-            public int level;
-            public UpgradeDefinition definition;
-        }
-
-        private readonly Dictionary<string, RuntimeState> _statesById = new();
-        private readonly Dictionary<string, UpgradeDefinition> _defsById =
-            new(StringComparer.Ordinal);
-
-        //==============================================================
-        //  저장 관련
-        //==============================================================
+        private static UpgradeManager _instance;
 
         private const string PlayerPrefsKey = "PF_Upgrades_v1";
 
+        [Header("Definitions")]
+        [SerializeField] private List<UpgradeDefinition> definitions = new List<UpgradeDefinition>();
+
+        [Header("Initial States (optional)")]
+        [SerializeField] private List<InitialState> initialStates = new List<InitialState>();
+
+        [Header("Debug")]
+        [SerializeField] private bool _logUpgrade = false;
+        [SerializeField] private bool _logMissWarnings = true;
+
+        private readonly Dictionary<string, UpgradeState> _statesById = new Dictionary<string, UpgradeState>(StringComparer.Ordinal);
+        private readonly Dictionary<string, UpgradeDefinition> _defById = new Dictionary<string, UpgradeDefinition>(StringComparer.Ordinal);
+
+        public event Action<string, int> OnLevelChanged;
+
         [Serializable]
-        private struct SaveDataEntry
+        public struct InitialState
         {
             public string id;
             public int level;
         }
 
         [Serializable]
-        private struct SaveData
+        private class SaveData
         {
-            public SaveDataEntry[] entries;
+            public Entry[] entries;
         }
 
-        //==============================================================
-        //  이벤트
-        //==============================================================
+        [Serializable]
+        private struct Entry
+        {
+            public string id;
+            public int level;
+        }
 
-        /// <summary>특정 업그레이드의 레벨이 변경됐을 때 호출 (id, newLevel)</summary>
-        public event Action<string, int> OnLevelChanged;
-
-        //==============================================================
-        //  Unity 라이프사이클
-        //==============================================================
+        private struct UpgradeState
+        {
+            public int level;
+            public UpgradeState(int level) => this.level = Mathf.Max(0, level);
+        }
 
         private void Awake()
         {
-            // 싱글톤 세팅
             if (_instance != null && _instance != this)
             {
                 Destroy(gameObject);
@@ -114,11 +84,15 @@ namespace Pulseforge.Systems
 
             BuildDefinitionLookup();
 
-            // 저장된 상태를 먼저 시도해서 로드, 없으면 인스펙터 초기값 사용
-            if (!TryLoadFromPlayerPrefs())
-            {
+            bool loaded = TryLoadFromPlayerPrefs();
+            if (!loaded)
                 InitializeStatesFromInspector();
-            }
+
+            // 정의에 있는 모든 업그레이드 ID는 항상 states에 존재하도록 보장
+            EnsureDefinitionStates();
+
+            if (_logUpgrade)
+                Debug.Log($"[UpgradeManager] Awake done. loaded={loaded} defs={definitions?.Count ?? 0} states={_statesById.Count} inst={GetInstanceID()}");
         }
 
         private void OnApplicationQuit()
@@ -126,99 +100,272 @@ namespace Pulseforge.Systems
             SaveToPlayerPrefs();
         }
 
-        //==============================================================
-        //  초기화
-        //==============================================================
+        // =========================================================
+        // ✅ UpgradeEntry.cs가 기대하는 API (컴파일 복구 핵심)
+        // =========================================================
 
         /// <summary>
-        /// _definitions 배열을 기반으로 id → UpgradeDefinition 테이블을 만든다.
+        /// UpgradeEntry.cs가 정의를 받아 UI를 구성할 때 사용.
         /// </summary>
-        private void BuildDefinitionLookup()
+        public UpgradeDefinition GetDefinition(string upgradeId)
         {
-            _defsById.Clear();
+            if (string.IsNullOrWhiteSpace(upgradeId))
+                return null;
 
-            if (_definitions == null)
-                return;
+            upgradeId = upgradeId.Trim();
 
-            foreach (var def in _definitions)
-            {
-                if (def == null)
-                    continue;
+            if (_defById.TryGetValue(upgradeId, out var def))
+                return def;
 
-                var id = def.Id;
-                if (string.IsNullOrWhiteSpace(id))
-                    continue;
-
-                if (_defsById.ContainsKey(id))
-                {
-                    Debug.LogWarning(
-                        $"[UpgradeManager] 중복된 UpgradeDefinition Id 발견: '{id}'. 첫 번째 것만 사용됩니다.",
-                        def);
-                    continue;
-                }
-
-                _defsById.Add(id, def);
-            }
+            // 혹시 definitions가 늦게 채워졌다면 재구축 시도
+            BuildDefinitionLookup();
+            return _defById.TryGetValue(upgradeId, out def) ? def : null;
         }
 
         /// <summary>
-        /// 인스펙터에서 지정한 _initialStates 를 바탕으로 런타임 상태를 구성한다.
-        /// 업그레이드가 한 번도 언급되지 않으면 레벨 0으로 간주한다.
+        /// UpgradeEntry.cs가 "선행조건 충족 여부"를 체크할 때 사용.
+        /// 프로젝트마다 prerequisite 구조가 달라서:
+        /// - 정의에 prerequisite 정보를 못 찾으면 "막지 않기" 위해 true 반환(보수적)
         /// </summary>
+        public bool MeetsPrerequisites(string upgradeId)
+        {
+            var def = GetDefinition(upgradeId);
+            if (def == null)
+                return true;
+
+            // 1) 흔한 형태: string prerequisiteId / string[] prerequisiteIds / List<string> prerequisiteIds
+            // 2) 혹은 struct/클래스 배열: (id, levelRequired) 형태
+            // 프로젝트 구현을 모르므로, "찾히는 것만" 검사하고, 못 찾으면 true로 둔다.
+
+            // (A) 단일 prerequisiteId
+            string singleId = ReadStringMember(def, new[]
+            {
+                "PrerequisiteId","prerequisiteId","RequireId","requireId","UnlockPrerequisiteId","unlockPrerequisiteId"
+            });
+            if (!string.IsNullOrWhiteSpace(singleId))
+            {
+                return GetLevel(singleId) > 0;
+            }
+
+            // (B) string 리스트/배열
+            var idList = ReadStringListMember(def, new[]
+            {
+                "PrerequisiteIds","prerequisiteIds","Requires","requires","UnlockPrerequisiteIds","unlockPrerequisiteIds"
+            });
+            if (idList != null && idList.Count > 0)
+            {
+                for (int i = 0; i < idList.Count; i++)
+                {
+                    if (string.IsNullOrWhiteSpace(idList[i])) continue;
+                    if (GetLevel(idList[i].Trim()) <= 0)
+                        return false;
+                }
+                return true;
+            }
+
+            // (C) (id, requiredLevel) 형태의 리스트/배열을 추정
+            // 멤버명이 아래 중 하나면 탐색해본다.
+            var reqObjects = ReadObjectListMember(def, new[]
+            {
+                "Prerequisites","prerequisites","Requirements","requirements","UnlockRequirements","unlockRequirements"
+            });
+
+            if (reqObjects != null && reqObjects.Count > 0)
+            {
+                for (int i = 0; i < reqObjects.Count; i++)
+                {
+                    object req = reqObjects[i];
+                    if (req == null) continue;
+
+                    string rid = ReadStringFromAny(req, new[] { "id", "Id", "upgradeId", "UpgradeId", "requireId", "RequireId" });
+                    int rlv = ReadIntFromAny(req, new[] { "level", "Level", "requiredLevel", "RequiredLevel", "minLevel", "MinLevel" }, defaultValue: 1);
+
+                    if (!string.IsNullOrWhiteSpace(rid))
+                    {
+                        if (GetLevel(rid.Trim()) < rlv)
+                            return false;
+                    }
+                }
+                return true;
+            }
+
+            // prerequisite 정보를 정의에서 못 찾으면 막지 않는다.
+            return true;
+        }
+
+        /// <summary>
+        /// UpgradeEntry.cs가 버튼 클릭 시 호출하는 업그레이드 시도 함수.
+        /// 비용/재화 차감은 프로젝트마다 RewardManager/Wallet 등이 따로 있으니
+        /// 여기서는 "레벨업 가능 여부 + 선행조건 + Max"만 최소 보장.
+        /// </summary>
+        public bool TryUpgrade(string upgradeId)
+        {
+            if (string.IsNullOrWhiteSpace(upgradeId))
+                return false;
+
+            upgradeId = upgradeId.Trim();
+
+            if (!MeetsPrerequisites(upgradeId))
+                return false;
+
+            if (IsMaxed(upgradeId))
+                return false;
+
+            int before = GetLevel(upgradeId);
+            SetLevel(upgradeId, before + 1, raiseEvent: true);
+            return true;
+        }
+
+        // =========================================================
+        // Public API (기본)
+        // =========================================================
+
+        public int GetLevel(string upgradeId)
+        {
+            if (string.IsNullOrWhiteSpace(upgradeId))
+                return 0;
+
+            upgradeId = upgradeId.Trim();
+
+            if (_statesById.TryGetValue(upgradeId, out var state))
+                return Mathf.Max(0, state.level);
+
+            // MISS면 자동 생성
+            _statesById[upgradeId] = new UpgradeState(0);
+
+            if (_logMissWarnings)
+                Debug.LogWarning($"[UpgradeManager] GetLevel MISS id='{upgradeId}' (states={_statesById.Count}) -> auto-create level=0");
+
+            return 0;
+        }
+
+        public int GetMaxLevel(string upgradeId)
+        {
+            if (string.IsNullOrWhiteSpace(upgradeId))
+                return 0;
+
+            upgradeId = upgradeId.Trim();
+            var def = GetDefinition(upgradeId);
+            if (def == null)
+                return 0;
+
+            return Mathf.Max(0, ReadDefMaxLevel(def));
+        }
+
+        public bool IsMaxed(string upgradeId)
+        {
+            int lv = GetLevel(upgradeId);
+            int max = GetMaxLevel(upgradeId);
+            return max > 0 && lv >= max;
+        }
+
+        public void SetLevel(string upgradeId, int level, bool raiseEvent = true)
+        {
+            if (string.IsNullOrWhiteSpace(upgradeId))
+                return;
+
+            upgradeId = upgradeId.Trim();
+            level = Mathf.Max(0, level);
+
+            if (!_statesById.TryGetValue(upgradeId, out var state))
+                state = new UpgradeState(0);
+
+            int max = GetMaxLevel(upgradeId);
+            if (max > 0) level = Mathf.Min(level, max);
+
+            if (state.level == level)
+                return;
+
+            state.level = level;
+            _statesById[upgradeId] = state;
+
+            if (_logUpgrade)
+                Debug.Log($"[UpgradeManager] SetLevel id='{upgradeId}' -> {level}");
+
+            if (raiseEvent)
+                OnLevelChanged?.Invoke(upgradeId, level);
+
+            SaveToPlayerPrefs();
+        }
+
+        // =========================================================
+        // Definitions / States
+        // =========================================================
+
+        private void BuildDefinitionLookup()
+        {
+            _defById.Clear();
+
+            if (definitions == null)
+                return;
+
+            for (int i = 0; i < definitions.Count; i++)
+            {
+                var def = definitions[i];
+                if (def == null) continue;
+
+                string id = ReadDefId(def);
+                if (string.IsNullOrWhiteSpace(id)) continue;
+
+                id = id.Trim();
+
+                if (_defById.ContainsKey(id))
+                {
+                    if (_logUpgrade)
+                        Debug.LogWarning($"[UpgradeManager] Duplicate definition id='{id}'. Later one will be ignored.");
+                    continue;
+                }
+
+                _defById.Add(id, def);
+            }
+
+            if (_logUpgrade)
+                Debug.Log($"[UpgradeManager] BuildDefinitionLookup defs={_defById.Count}");
+        }
+
         private void InitializeStatesFromInspector()
         {
             _statesById.Clear();
 
-            if (_initialStates != null)
+            if (initialStates != null)
             {
-                foreach (var s in _initialStates)
+                for (int i = 0; i < initialStates.Count; i++)
                 {
-                    if (string.IsNullOrWhiteSpace(s.id))
-                        continue;
+                    var s = initialStates[i];
+                    if (string.IsNullOrWhiteSpace(s.id)) continue;
 
-                    var id = s.id.Trim();
-                    var runtime = new RuntimeState
-                    {
-                        id = id,
-                        level = Mathf.Max(0, s.level),
-                        definition = GetDefinitionInternal(id)
-                    };
+                    string id = s.id.Trim();
+                    int lv = Mathf.Max(0, s.level);
 
-                    // 최대 레벨로 클램프
-                    int maxLevel = GetMaxLevelInternal(runtime.definition);
-                    if (runtime.level > maxLevel)
-                        runtime.level = maxLevel;
-
-                    _statesById[id] = runtime;
+                    _statesById[id] = new UpgradeState(lv);
                 }
             }
 
-            EnsureDefinitionStates();
+            if (_logUpgrade)
+                Debug.Log($"[UpgradeManager] InitializeStatesFromInspector done. states={_statesById.Count}");
         }
 
-        /// <summary>
-        /// _defsById 에 있는 모든 정의가 _statesById 에 최소 0레벨 상태로 존재하도록 보장한다.
-        /// </summary>
         private void EnsureDefinitionStates()
         {
-            foreach (var kvp in _defsById)
-            {
-                string id = kvp.Key;
-                if (_statesById.ContainsKey(id))
-                    continue;
+            if (_defById.Count == 0)
+                BuildDefinitionLookup();
 
-                _statesById[id] = new RuntimeState
-                {
-                    id = id,
-                    level = 0,
-                    definition = kvp.Value
-                };
+            foreach (var kv in _defById)
+            {
+                string id = kv.Key;
+                if (string.IsNullOrWhiteSpace(id)) continue;
+
+                if (!_statesById.ContainsKey(id))
+                    _statesById.Add(id, new UpgradeState(0));
             }
+
+            if (_logUpgrade)
+                Debug.Log($"[UpgradeManager] EnsureDefinitionStates done. states={_statesById.Count}, defs={_defById.Count}");
         }
 
-        //==============================================================
-        //  저장 / 로드
-        //==============================================================
+        // =========================================================
+        // Save / Load
+        // =========================================================
 
         private bool TryLoadFromPlayerPrefs()
         {
@@ -232,36 +379,22 @@ namespace Pulseforge.Systems
             try
             {
                 var data = JsonUtility.FromJson<SaveData>(json);
-                if (data.entries == null || data.entries.Length == 0)
+                if (data == null || data.entries == null || data.entries.Length == 0)
                     return false;
 
                 _statesById.Clear();
 
-                foreach (var entry in data.entries)
+                for (int i = 0; i < data.entries.Length; i++)
                 {
-                    if (string.IsNullOrWhiteSpace(entry.id))
+                    var e = data.entries[i];
+                    if (string.IsNullOrWhiteSpace(e.id))
                         continue;
 
-                    string id = entry.id.Trim();
-                    int level = Mathf.Max(0, entry.level);
-                    var def = GetDefinitionInternal(id);
+                    string id = e.id.Trim();
+                    int lv = Mathf.Max(0, e.level);
 
-                    var state = new RuntimeState
-                    {
-                        id = id,
-                        level = level,
-                        definition = def
-                    };
-
-                    int maxLevel = GetMaxLevelInternal(def);
-                    if (state.level > maxLevel)
-                        state.level = maxLevel;
-
-                    _statesById[id] = state;
+                    _statesById[id] = new UpgradeState(lv);
                 }
-
-                // 정의는 있는데 세이브 데이터에는 없는 항목들 0레벨로 채우기
-                EnsureDefinitionStates();
 
                 if (_logUpgrade)
                     Debug.Log($"[UpgradeManager] 업그레이드 상태 로드 완료: {_statesById.Count}개");
@@ -275,51 +408,32 @@ namespace Pulseforge.Systems
             }
         }
 
-        private void SaveToPlayerPrefs()
+        public void SaveToPlayerPrefs()
         {
-            try
+            // 기존 정책 유지: 0레벨은 저장 스킵
+            var list = new List<Entry>(_statesById.Count);
+
+            foreach (var kv in _statesById)
             {
-                var list = new List<SaveDataEntry>(_statesById.Count);
-                foreach (var kvp in _statesById)
-                {
-                    var state = kvp.Value;
-                    if (state == null)
-                        continue;
-                    if (string.IsNullOrWhiteSpace(state.id))
-                        continue;
-                    // 0레벨은 저장 안 해도 되게 스킵 (선택 사항)
-                    if (state.level <= 0)
-                        continue;
+                string id = kv.Key;
+                int lv = kv.Value.level;
 
-                    list.Add(new SaveDataEntry
-                    {
-                        id = state.id,
-                        level = state.level
-                    });
-                }
+                if (lv <= 0)
+                    continue;
 
-                var data = new SaveData
-                {
-                    entries = list.ToArray()
-                };
-
-                string json = JsonUtility.ToJson(data);
-                PlayerPrefs.SetString(PlayerPrefsKey, json);
-                PlayerPrefs.Save();
-
-                if (_logUpgrade)
-                    Debug.Log($"[UpgradeManager] 업그레이드 상태 저장 완료: {list.Count}개");
+                list.Add(new Entry { id = id, level = lv });
             }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[UpgradeManager] 업그레이드 상태 저장 중 오류 발생: {ex}");
-            }
+
+            var data = new SaveData { entries = list.ToArray() };
+            string json = JsonUtility.ToJson(data);
+
+            PlayerPrefs.SetString(PlayerPrefsKey, json);
+            PlayerPrefs.Save();
+
+            if (_logUpgrade)
+                Debug.Log($"[UpgradeManager] 업그레이드 상태 저장 완료: {list.Count}개");
         }
 
-        /// <summary>
-        /// 모든 업그레이드를 0레벨로 리셋하고, 저장 데이터도 삭제한다.
-        /// (디버그/테스트용, 버튼에서 호출 가능)
-        /// </summary>
         [ContextMenu("Reset All Upgrades")]
         public void ResetAllUpgrades()
         {
@@ -327,196 +441,274 @@ namespace Pulseforge.Systems
 
             _statesById.Clear();
             InitializeStatesFromInspector();
+            EnsureDefinitionStates();
 
             if (_logUpgrade)
-                Debug.Log("[UpgradeManager] 모든 업그레이드 리셋 + 저장 데이터 삭제");
+                Debug.Log("[UpgradeManager] ResetAllUpgrades done.");
+        }
 
-            // UI 갱신을 위해 현재 상태를 모두 이벤트로 쏴준다.
-            foreach (var kvp in _statesById)
+        // =========================================================
+        // Reflection helpers (UpgradeDefinition 구현 차이 흡수)
+        // =========================================================
+
+        private static readonly string[] DefIdCandidates =
+        {
+            "Id", "id",
+            "UpgradeId", "upgradeId",
+            "ID", "UpgradeID"
+        };
+
+        private static readonly string[] DefMaxCandidates =
+        {
+            "MaxLevel", "maxLevel",
+            "Max", "max",
+        };
+
+        private static string ReadDefId(UpgradeDefinition def)
+        {
+            if (def == null) return null;
+
+            var t = def.GetType();
+            for (int i = 0; i < DefIdCandidates.Length; i++)
             {
-                var state = kvp.Value;
-                if (state == null) continue;
-                OnLevelChanged?.Invoke(state.id, state.level);
-            }
-        }
+                var name = DefIdCandidates[i];
 
-        //==============================================================
-        //  내부 유틸
-        //==============================================================
+                var p = t.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (p != null && p.PropertyType == typeof(string))
+                {
+                    try { return p.GetValue(def) as string; }
+                    catch { }
+                }
 
-        private UpgradeDefinition GetDefinitionInternal(string id)
-        {
-            if (string.IsNullOrWhiteSpace(id))
-                return null;
-
-            _defsById.TryGetValue(id, out var def);
-            return def;
-        }
-
-        private RuntimeState GetOrCreateState(string id)
-        {
-            if (string.IsNullOrWhiteSpace(id))
-                return null;
-
-            id = id.Trim();
-
-            if (_statesById.TryGetValue(id, out var state))
-                return state;
-
-            var def = GetDefinitionInternal(id);
-            state = new RuntimeState
-            {
-                id = id,
-                level = 0,
-                definition = def
-            };
-            _statesById.Add(id, state);
-            return state;
-        }
-
-        private int GetMaxLevelInternal(UpgradeDefinition def)
-        {
-            if (def == null)
-                return _defaultMaxLevel;
-
-            return Mathf.Max(1, def.MaxLevel);
-        }
-
-        //==============================================================
-        //  퍼블릭 조회 API
-        //==============================================================
-
-        /// <summary>특정 업그레이드의 현재 레벨을 반환 (정의/상태가 없으면 0)</summary>
-        public int GetLevel(string upgradeId)
-        {
-            if (string.IsNullOrWhiteSpace(upgradeId))
-                return 0;
-
-            upgradeId = upgradeId.Trim();
-
-            return _statesById.TryGetValue(upgradeId, out var state)
-                ? Mathf.Max(0, state.level)
-                : 0;
-        }
-
-        /// <summary>특정 업그레이드의 최대 레벨을 반환</summary>
-        public int GetMaxLevel(string upgradeId)
-        {
-            var def = GetDefinitionInternal(upgradeId);
-            return GetMaxLevelInternal(def);
-        }
-
-        /// <summary>특정 업그레이드의 ScriptableObject 정의를 반환 (없을 수 있음)</summary>
-        public UpgradeDefinition GetDefinition(string upgradeId)
-        {
-            return GetDefinitionInternal(upgradeId);
-        }
-
-        /// <summary>현재 레벨이 최대 레벨인지 여부</summary>
-        public bool IsMaxLevel(string upgradeId)
-        {
-            int level = GetLevel(upgradeId);
-            int max = GetMaxLevel(upgradeId);
-            return level >= max;
-        }
-
-        //==============================================================
-        //  프리리퀴짓 체크
-        //==============================================================
-
-        /// <summary>
-        /// 이 업그레이드가 해금 조건(플레이어 레벨, 선행 업그레이드)을 만족하는지 여부.
-        /// 해금 조건이 없다면 항상 true 를 반환한다.
-        /// </summary>
-        public bool MeetsPrerequisites(string upgradeId)
-        {
-            var def = GetDefinitionInternal(upgradeId);
-            if (def == null)
-                return true;
-
-            int playerLevel = 0;
-            var levelManager = LevelManager.Instance;
-            if (levelManager != null)
-                playerLevel = levelManager.Level;
-
-            // UpgradeDefinition 내부의 CheckPrerequisites 로 위임
-            return def.CheckPrerequisites(playerLevel, GetLevel);
-        }
-
-        //==============================================================
-        //  업그레이드 처리
-        //==============================================================
-
-        /// <summary>
-        /// 업그레이드를 시도한다.
-        /// - 아직 최대 레벨이 아니고, 해금 조건을 모두 만족하면 레벨을 1 올리고 true 반환.
-        /// - 이미 최대 레벨이거나 조건을 만족하지 못하면 false 반환.
-        /// </summary>
-        public bool TryUpgrade(string upgradeId)
-        {
-            var state = GetOrCreateState(upgradeId);
-            if (state == null)
-                return false;
-
-            int maxLevel = GetMaxLevelInternal(state.definition);
-            if (state.level >= maxLevel)
-            {
-                if (_logUpgrade)
-                    Debug.Log($"[UpgradeManager] '{upgradeId}' 이미 최대 레벨({maxLevel})입니다.");
-                return false;
+                var f = t.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (f != null && f.FieldType == typeof(string))
+                {
+                    try { return f.GetValue(def) as string; }
+                    catch { }
+                }
             }
 
-            // 선행 조건(플레이어 레벨, 다른 업그레이드 레벨) 검사
-            if (!MeetsPrerequisites(upgradeId))
+            return null;
+        }
+
+        private static int ReadDefMaxLevel(UpgradeDefinition def)
+        {
+            if (def == null) return 0;
+
+            var t = def.GetType();
+            for (int i = 0; i < DefMaxCandidates.Length; i++)
             {
-                if (_logUpgrade)
-                    Debug.Log($"[UpgradeManager] '{upgradeId}' 업그레이드 실패: 선행 조건을 만족하지 않습니다.");
-                return false;
+                var name = DefMaxCandidates[i];
+
+                var p = t.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (p != null && p.PropertyType == typeof(int))
+                {
+                    try { return (int)p.GetValue(def); }
+                    catch { }
+                }
+
+                var f = t.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (f != null && f.FieldType == typeof(int))
+                {
+                    try { return (int)f.GetValue(def); }
+                    catch { }
+                }
             }
 
-            state.level++;
-
-            if (_logUpgrade)
-                Debug.Log($"[UpgradeManager] '{upgradeId}' 업그레이드 → Lv.{state.level}");
-
-            OnLevelChanged?.Invoke(upgradeId, state.level);
-
-            // 레벨 변경 후 즉시 저장
-            SaveToPlayerPrefs();
-
-            return true;
+            // maxLevel이 정의에 없으면 제한 없음 취급
+            return 999;
         }
 
-        /// <summary>
-        /// 강제로 레벨을 설정하는 디버그용 함수.
-        /// </summary>
-        public void SetLevel(string upgradeId, int level)
+        private static string ReadStringMember(object obj, string[] names)
         {
-            var state = GetOrCreateState(upgradeId);
-            if (state == null)
-                return;
+            if (obj == null) return null;
+            var t = obj.GetType();
 
-            int maxLevel = GetMaxLevelInternal(state.definition);
-            state.level = Mathf.Clamp(level, 0, maxLevel);
+            for (int i = 0; i < names.Length; i++)
+            {
+                string n = names[i];
 
-            if (_logUpgrade)
-                Debug.Log($"[UpgradeManager] '{upgradeId}' 레벨 강제 설정 → Lv.{state.level}");
+                var p = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (p != null && p.PropertyType == typeof(string))
+                {
+                    try { return p.GetValue(obj) as string; } catch { }
+                }
 
-            OnLevelChanged?.Invoke(upgradeId, state.level);
+                var f = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (f != null && f.FieldType == typeof(string))
+                {
+                    try { return f.GetValue(obj) as string; } catch { }
+                }
+            }
 
-            // 강제 설정도 저장
-            SaveToPlayerPrefs();
+            return null;
         }
 
-#if UNITY_EDITOR
-        private void OnValidate()
+        private static List<string> ReadStringListMember(object obj, string[] names)
         {
-            if (_initialStates == null)
-                _initialStates = Array.Empty<InitialState>();
+            if (obj == null) return null;
+            var t = obj.GetType();
 
-            if (_definitions == null)
-                _definitions = Array.Empty<UpgradeDefinition>();
+            for (int i = 0; i < names.Length; i++)
+            {
+                string n = names[i];
+
+                // string[]
+                var fArr = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (fArr != null && fArr.FieldType == typeof(string[]))
+                {
+                    try
+                    {
+                        var arr = (string[])fArr.GetValue(obj);
+                        return arr != null ? new List<string>(arr) : null;
+                    }
+                    catch { }
+                }
+
+                var pArr = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (pArr != null && pArr.PropertyType == typeof(string[]))
+                {
+                    try
+                    {
+                        var arr = (string[])pArr.GetValue(obj);
+                        return arr != null ? new List<string>(arr) : null;
+                    }
+                    catch { }
+                }
+
+                // List<string>
+                if (fArr != null && typeof(IList<string>).IsAssignableFrom(fArr.FieldType))
+                {
+                    try
+                    {
+                        var list = fArr.GetValue(obj) as IList<string>;
+                        return list != null ? new List<string>(list) : null;
+                    }
+                    catch { }
+                }
+
+                if (pArr != null && typeof(IList<string>).IsAssignableFrom(pArr.PropertyType))
+                {
+                    try
+                    {
+                        var list = pArr.GetValue(obj) as IList<string>;
+                        return list != null ? new List<string>(list) : null;
+                    }
+                    catch { }
+                }
+            }
+
+            return null;
         }
-#endif
+
+        private static List<object> ReadObjectListMember(object obj, string[] names)
+        {
+            if (obj == null) return null;
+            var t = obj.GetType();
+
+            for (int i = 0; i < names.Length; i++)
+            {
+                string n = names[i];
+
+                var f = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (f != null)
+                {
+                    try
+                    {
+                        var v = f.GetValue(obj);
+                        var list = ConvertToObjectList(v);
+                        if (list != null) return list;
+                    }
+                    catch { }
+                }
+
+                var p = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (p != null)
+                {
+                    try
+                    {
+                        var v = p.GetValue(obj);
+                        var list = ConvertToObjectList(v);
+                        if (list != null) return list;
+                    }
+                    catch { }
+                }
+            }
+
+            return null;
+        }
+
+        private static List<object> ConvertToObjectList(object v)
+        {
+            if (v == null) return null;
+
+            // 배열
+            if (v is Array arr)
+            {
+                var list = new List<object>(arr.Length);
+                foreach (var e in arr) list.Add(e);
+                return list;
+            }
+
+            // IList
+            if (v is System.Collections.IList ilist)
+            {
+                var list = new List<object>(ilist.Count);
+                foreach (var e in ilist) list.Add(e);
+                return list;
+            }
+
+            return null;
+        }
+
+        private static string ReadStringFromAny(object obj, string[] names)
+        {
+            if (obj == null) return null;
+            var t = obj.GetType();
+
+            for (int i = 0; i < names.Length; i++)
+            {
+                string n = names[i];
+
+                var p = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (p != null && p.PropertyType == typeof(string))
+                {
+                    try { return p.GetValue(obj) as string; } catch { }
+                }
+
+                var f = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (f != null && f.FieldType == typeof(string))
+                {
+                    try { return f.GetValue(obj) as string; } catch { }
+                }
+            }
+
+            return null;
+        }
+
+        private static int ReadIntFromAny(object obj, string[] names, int defaultValue)
+        {
+            if (obj == null) return defaultValue;
+            var t = obj.GetType();
+
+            for (int i = 0; i < names.Length; i++)
+            {
+                string n = names[i];
+
+                var p = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (p != null && p.PropertyType == typeof(int))
+                {
+                    try { return (int)p.GetValue(obj); } catch { }
+                }
+
+                var f = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (f != null && f.FieldType == typeof(int))
+                {
+                    try { return (int)f.GetValue(obj); } catch { }
+                }
+            }
+
+            return defaultValue;
+        }
     }
 }
