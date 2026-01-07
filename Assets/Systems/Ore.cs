@@ -36,6 +36,11 @@ namespace Pulseforge.Systems
         [SerializeField] private float wobbleScale = 0.06f;
         [SerializeField] private float wobbleDuration = 0.08f;
 
+        [Header("Hit Flash (OreHitFlash)")]
+        [Tooltip("OreHitFlash 컴포넌트를 통해 Additive 오버레이 플래시를 재생")]
+        [SerializeField] private bool flashOnHit = true;
+        [SerializeField] private OreHitFlash hitFlash;
+
         [Header("HP Bar (world-units)")]
         [SerializeField] private bool showHpBar = true;
         [Tooltip("처음엔 숨겨두고, 한 번이라도 맞으면 켜짐")]
@@ -53,13 +58,14 @@ namespace Pulseforge.Systems
         [SerializeField] private int referencePPU = 128;
 
         private float hp;
+
+        // HP Bar
         private Transform barRoot;
         private SpriteRenderer srBg;
         private SpriteRenderer srFill;
         private static Sprite _onePxSprite;
         private SpriteRenderer mySprite;
         private int mySortingOrder;
-
         private bool barDirty;
 
         // wobble
@@ -80,8 +86,14 @@ namespace Pulseforge.Systems
         private void Awake()
         {
             hp = Mathf.Max(1f, maxHp);
+
+            // Ore는 "자식이 없고 루트에 SpriteRenderer가 붙어있는" 구조도 있으니
+            // GetComponentInChildren로 잡되, 자기 자신도 포함이라 안전.
             mySprite = GetComponentInChildren<SpriteRenderer>();
             mySortingOrder = mySprite ? mySprite.sortingOrder : 0;
+
+            // OreHitFlash 자동 연결(드래그 안 해도 돌아가게)
+            if (hitFlash == null) hitFlash = GetComponent<OreHitFlash>();
 
             EnsureBarBuilt();
             SetBarVisible(showHpBar && !revealBarOnFirstHit);
@@ -111,7 +123,13 @@ namespace Pulseforge.Systems
             hp = Mathf.Max(0f, hp - damage);
             UpdateBarFill();
 
-            if (wobbleOnHit) PlayWobble();
+            // ✅ 타격 플래시(오버레이 Additive)
+            if (flashOnHit && hitFlash != null)
+                hitFlash.PlayNormal();
+
+            // ✅ 기존 흔들림 유지
+            if (wobbleOnHit)
+                PlayWobble();
 
             if (hp <= 0f)
                 OnBroken();
@@ -149,12 +167,10 @@ namespace Pulseforge.Systems
                 RewardManager.Instance?.Add(rewardType, rewardAmount);
 
             // ✅ 경험치 지급 (LevelManager 연동)
-            //   → 지금은 광석 타입에 따라 계수 안 붙이고, 기본 양만 넘김
             if (expAmount > 0 && LevelManager.Instance != null)
                 LevelManager.Instance.AddExp(expAmount);
 
             // ✅ 외부 훅(예: BigOreSuccessHook)에게 "깨짐" 알림
-            // Destroy/리셋 전에 호출해두는 게 가장 안전함.
             try
             {
                 OnBrokenEvent?.Invoke(this);
@@ -227,6 +243,7 @@ namespace Pulseforge.Systems
                 srFill.sprite = _onePxSprite;
             }
 
+            // sorting
             int bgOrder = mySortingOrder + barSortingOffsetBG;
             int fillOrder = mySortingOrder + barSortingOffsetFill;
             int sortingLayerId = mySprite ? mySprite.sortingLayerID : 0;
